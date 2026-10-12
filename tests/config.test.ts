@@ -1,0 +1,92 @@
+import { describe, expect, test } from 'claude-code/testing'
+import { type RawEnv, parseConfig, parseUrl } from '../hooks/config'
+
+const NO_ENV: RawEnv = { url: undefined, token: undefined, tag: undefined, tools: undefined, permissions: undefined }
+
+function env(fields: Partial<RawEnv>): RawEnv {
+  return { ...NO_ENV, ...fields }
+}
+
+describe('parseUrl', () => {
+  test('takes loopback http and strips trailing slashes', () => {
+    expect(parseUrl('http://127.0.0.1:47800/')).toEqual({ ok: true, url: 'http://127.0.0.1:47800' })
+    expect(parseUrl('http://localhost:9/hooks//')).toEqual({ ok: true, url: 'http://localhost:9/hooks' })
+    expect(parseUrl('http://[::1]:5000')).toEqual({ ok: true, url: 'http://[::1]:5000' })
+  })
+
+  test('takes https to any host', () => {
+    expect(parseUrl('https://events.example.com/claude')).toEqual({ ok: true, url: 'https://events.example.com/claude' })
+  })
+
+  test('refuses plain http off the machine', () => {
+    expect(parseUrl('http://192.168.1.10:47800').ok).toBe(false)
+    expect(parseUrl('http://example.com').ok).toBe(false)
+  })
+
+  test('refuses other schemes, credentials, queries and garbage', () => {
+    expect(parseUrl('ftp://127.0.0.1').ok).toBe(false)
+    expect(parseUrl('file:///tmp/x').ok).toBe(false)
+    expect(parseUrl('http://user:pw@127.0.0.1:1').ok).toBe(false)
+    expect(parseUrl('http://127.0.0.1:1/?a=b').ok).toBe(false)
+    expect(parseUrl('http://127.0.0.1:1/#x').ok).toBe(false)
+    expect(parseUrl('not a url').ok).toBe(false)
+  })
+})
+
+describe('parseConfig', () => {
+  test('is off with no URL anywhere, and with a blank one', () => {
+    expect(parseConfig(NO_ENV, {})).toEqual({ kind: 'off' })
+    expect(parseConfig(env({ url: '   ' }), { url: '' })).toEqual({ kind: 'off' })
+  })
+
+  test('reads the URL from options when the env has none', () => {
+    const result = parseConfig(NO_ENV, { url: 'http://127.0.0.1:1' })
+    expect(result.kind).toBe('on')
+  })
+
+  test('lets a set env var win over its option', () => {
+    const result = parseConfig(env({ url: 'http://127.0.0.1:2', tools: 'full' }), { url: 'http://127.0.0.1:1', toolDetail: 'summary' })
+    expect(result).toEqual({
+      kind: 'on',
+      config: { url: 'http://127.0.0.1:2', token: undefined, tag: undefined, toolDetail: 'full', hostPermissions: false },
+      warnings: [],
+    })
+  })
+
+  test('defaults tool detail to summary', () => {
+    const result = parseConfig(env({ url: 'http://127.0.0.1:1' }), {})
+    expect(result.kind === 'on' && result.config.toolDetail).toBe('summary')
+  })
+
+  test('refuses a token with spaces or line breaks', () => {
+    expect(parseConfig(env({ url: 'http://127.0.0.1:1', token: 'a b' }), {}).kind).toBe('invalid')
+    expect(parseConfig(env({ url: 'http://127.0.0.1:1', token: 'a\nb' }), {}).kind).toBe('invalid')
+  })
+
+  test('refuses a tag with control characters or past its length', () => {
+    expect(parseConfig(env({ url: 'http://127.0.0.1:1', tag: 'pane\u00071' }), {}).kind).toBe('invalid')
+    expect(parseConfig(env({ url: 'http://127.0.0.1:1', tag: 'x'.repeat(257) }), {}).kind).toBe('invalid')
+  })
+
+  test('refuses an unknown tool detail or permissions value', () => {
+    expect(parseConfig(env({ url: 'http://127.0.0.1:1', tools: 'everything' }), {}).kind).toBe('invalid')
+    expect(parseConfig(env({ url: 'http://127.0.0.1:1', permissions: 'yes' }), {}).kind).toBe('invalid')
+  })
+
+  test('turns host permissions on only with a token', () => {
+    const withToken = parseConfig(env({ url: 'http://127.0.0.1:1', token: 't', permissions: 'host' }), {})
+    expect(withToken.kind === 'on' && withToken.config.hostPermissions).toBe(true)
+
+    const without = parseConfig(env({ url: 'http://127.0.0.1:1', permissions: 'host' }), {})
+    expect(without.kind).toBe('on')
+    if (without.kind === 'on') {
+      expect(without.config.hostPermissions).toBe(false)
+      expect(without.warnings).toEqual(['host permissions are off: they need a token'])
+    }
+  })
+
+  test('lets CLAUDE_EVENTS_PERMISSIONS=off override the option', () => {
+    const result = parseConfig(env({ url: 'http://127.0.0.1:1', token: 't', permissions: 'off' }), { hostPermissions: true })
+    expect(result.kind === 'on' && result.config.hostPermissions).toBe(false)
+  })
+})

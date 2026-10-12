@@ -1,0 +1,32 @@
+{
+  "name": "event-bridge",
+  "version": "0.1.0",
+  "description": "Sends session, turn, attention and tool events to a host program over HTTP, and takes prompts and interrupts back.",
+  "userConfig": {
+    "url": {
+      "type": "string",
+      "title": "Host URL",
+      "description": "Base URL of the host's listener, such as http://127.0.0.1:47800. CLAUDE_EVENTS_URL overrides it. Empty leaves the mod idle.",
+      "default": ""
+    },
+    "token": {
+      "type": "string",
+      "title": "Host token",
+      "description": "Shared secret sent as a bearer token. CLAUDE_EVENTS_TOKEN overrides it. Commands from the host are accepted only when it is set.",
+      "sensitive": true
+    },
+    "toolDetail": {
+      "type": "string",
+      "title": "Tool detail",
+      "description": "summary cuts long strings in tool inputs and results to 2 KB; full sends them whole. CLAUDE_EVENTS_TOOLS overrides it.",
+      "options": ["summary", "full"],
+      "default": "summary"
+    },
+    "hostPermissions": {
+      "type": "boolean",
+      "title": "Host answers permission asks",
+      "description": "Lets the host allow or deny a tool call that would otherwise ask. Needs the token. CLAUDE_EVENTS_PERMISSIONS=host overrides it.",
+      "default": false
+    }
+  }
+}

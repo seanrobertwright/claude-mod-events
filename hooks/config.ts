@@ -1,0 +1,148 @@
+import type { PluginOptions } from 'claude-code'
+
+export type ToolDetail = 'summary' | 'full'
+
+/** What the mod runs with once the host is configured. */
+export type Config = {
+  /** Base URL with no trailing slash: `${url}/v1/events` and so on. */
+  readonly url: string
+  /** Bearer token; inbound commands and host permissions need it. */
+  readonly token: string | undefined
+  /** The host's own label, echoed on every event. */
+  readonly tag: string | undefined
+  readonly toolDetail: ToolDetail
+  readonly hostPermissions: boolean
+}
+
+/**
+ * The raw environment, one field per variable; undefined means unset.
+ * Kept apart from `$.env.get` so the parser is a pure function.
+ */
+export type RawEnv = {
+  readonly url: string | undefined
+  readonly token: string | undefined
+  readonly tag: string | undefined
+  readonly tools: string | undefined
+  readonly permissions: string | undefined
+}
+
+/**
+ * `off`: no URL anywhere, the mod stays idle and says nothing.
+ * `invalid`: something is set but wrong, the mod stays idle and says why once.
+ * `on`: the config, plus warnings about options it had to drop.
+ */
+export type ConfigResult =
+  | { readonly kind: 'off' }
+  | { readonly kind: 'invalid'; readonly reason: string }
+  | { readonly kind: 'on'; readonly config: Config; readonly warnings: readonly string[] }
+
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['127.0.0.1', 'localhost', '[::1]'])
+const MAX_TOKEN_LENGTH = 4096
+const MAX_TAG_LENGTH = 256
+// Visible ASCII only: a token goes into a header, so no spaces or line breaks.
+const TOKEN_PATTERN = /^[\x21-\x7e]+$/
+const CONTROL_PATTERN = /[\x00-\x1f\x7f]/
+
+/** An env value trimmed, or undefined when unset or blank. */
+function present(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined
+  const trimmed = value.trim()
+  return trimmed === '' ? undefined : trimmed
+}
+
+function optionString(options: PluginOptions, key: string): string | undefined {
+  if (!Object.hasOwn(options, key)) return undefined
+  const value = options[key]
+  return typeof value === 'string' ? present(value) : undefined
+}
+
+function optionBoolean(options: PluginOptions, key: string): boolean {
+  if (!Object.hasOwn(options, key)) return false
+  return options[key] === true
+}
+
+/** The base URL, or the reason it is refused. */
+export function parseUrl(raw: string): { ok: true; url: string } | { ok: false; reason: string } {
+  let parsed: URL
+  try {
+    parsed = new URL(raw)
+  } catch {
+    return { ok: false, reason: `"${raw}" is not a URL` }
+  }
+  if (parsed.username !== '' || parsed.password !== '') {
+    return { ok: false, reason: 'the URL must not carry a user name or password; use the token' }
+  }
+  if (parsed.search !== '' || parsed.hash !== '') {
+    return { ok: false, reason: 'the URL must not carry a query or a fragment' }
+  }
+  if (parsed.protocol === 'http:') {
+    if (!LOOPBACK_HOSTS.has(parsed.hostname)) {
+      return { ok: false, reason: `plain http is only allowed to 127.0.0.1, localhost or [::1], not ${parsed.hostname}` }
+    }
+  } else if (parsed.protocol !== 'https:') {
+    return { ok: false, reason: `the URL must be http or https, not ${parsed.protocol}` }
+  }
+  const path = parsed.pathname.replace(/\/+$/, '')
+  return { ok: true, url: `${parsed.origin}${path}` }
+}
+
+/**
+ * Builds the config from the environment and the plugin's options.
+ * A set environment variable wins over its option.
+ */
+export function parseConfig(env: RawEnv, options: PluginOptions): ConfigResult {
+  const rawUrl = present(env.url) ?? optionString(options, 'url')
+  if (rawUrl === undefined) return { kind: 'off' }
+
+  const url = parseUrl(rawUrl)
+  if (!url.ok) return { kind: 'invalid', reason: url.reason }
+
+  const token = present(env.token) ?? optionString(options, 'token')
+  if (token !== undefined) {
+    if (token.length > MAX_TOKEN_LENGTH) {
+      return { kind: 'invalid', reason: `the token is longer than ${MAX_TOKEN_LENGTH} characters` }
+    }
+    if (!TOKEN_PATTERN.test(token)) {
+      return { kind: 'invalid', reason: 'the token may hold only visible ASCII characters' }
+    }
+  }
+
+  const tag = present(env.tag)
+  if (tag !== undefined) {
+    if (tag.length > MAX_TAG_LENGTH) {
+      return { kind: 'invalid', reason: `CLAUDE_EVENTS_TAG is longer than ${MAX_TAG_LENGTH} characters` }
+    }
+    if (CONTROL_PATTERN.test(tag)) {
+      return { kind: 'invalid', reason: 'CLAUDE_EVENTS_TAG holds control characters' }
+    }
+  }
+
+  const tools = present(env.tools) ?? optionString(options, 'toolDetail') ?? 'summary'
+  if (tools !== 'summary' && tools !== 'full') {
+    return { kind: 'invalid', reason: `tool detail must be summary or full, not "${tools}"` }
+  }
+
+  const permissions = present(env.permissions)
+  let hostPermissions: boolean
+  if (permissions === undefined) {
+    hostPermissions = optionBoolean(options, 'hostPermissions')
+  } else if (permissions === 'host') {
+    hostPermissions = true
+  } else if (permissions === 'off') {
+    hostPermissions = false
+  } else {
+    return { kind: 'invalid', reason: `CLAUDE_EVENTS_PERMISSIONS must be host or off, not "${permissions}"` }
+  }
+
+  const warnings: string[] = []
+  if (hostPermissions && token === undefined) {
+    hostPermissions = false
+    warnings.push('host permissions are off: they need a token')
+  }
+
+  return {
+    kind: 'on',
+    config: { url: url.url, token, tag, toolDetail: tools, hostPermissions },
+    warnings,
+  }
+}

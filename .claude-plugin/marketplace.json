@@ -1,0 +1,11 @@
+{
+  "name": "event-bridge",
+  "owner": { "name": "Sean Wright" },
+  "plugins": [
+    {
+      "name": "event-bridge",
+      "source": "./",
+      "description": "Sends session, turn, attention and tool events to a host program over HTTP, and takes prompts and interrupts back."
+    }
+  ]
+}

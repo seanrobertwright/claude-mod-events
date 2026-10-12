@@ -1,0 +1,5 @@
+{
+  // Tables and URLs make long lines; wrapping them would not help a reader.
+  "config": { "MD013": false },
+  "ignores": ["node_modules/**", ".claude-plugin/types/**"]
+}
