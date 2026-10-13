@@ -49,7 +49,7 @@ any `2xx`. Events from one process arrive in order, one request at a time.
   an `outbox.dropped` event says how many.
 - `ts` is epoch milliseconds when the event was raised.
 - `sessionId` is the Claude Code session id at that moment. It changes after
-  `/clear`, so route by `tag` when you need one key for a pane.
+  `/clear` and after a resume, so route by `tag` when you need one key for a pane.
 - `tag` is `CLAUDE_EVENTS_TAG`, or absent.
 
 How the mod treats your answer:
@@ -82,7 +82,9 @@ slow to answer may miss that last batch.
 ## Commands: `GET {url}/v1/commands`
 
 The mod long-polls this endpoint while the session runs, and only when a
-token is set. Query parameters:
+token is set. Polling goes on across `/clear` and a resume,
+under the new session id. It stops when the session ends for any other reason:
+an exit, a finished `-p` run, a signal or a logout. Query parameters:
 
 - `session`: the current session id.
 - `tag`: `CLAUDE_EVENTS_TAG`, when set.

@@ -1,6 +1,7 @@
 import type { HttpResponse, On } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Envelope } from '../hooks/events'
+import { MIN_POLL_INTERVAL_MS } from '../hooks/inbox'
 
 type Sent = { url: string; body: string | undefined; headers: Record<string, string> | undefined }
 
@@ -19,16 +20,15 @@ function world(on: On, env: Record<string, string>, commands: unknown[] = []) {
   const prompts: string[] = []
   const aborts: string[] = []
   const logs: string[] = []
-  let served = false
+  const pending = [...commands]
   let decision = '{"decision":"allow"}'
 
   // Calls on `$` are answered `{ value }`, as core answers them.
   on('http.fetch', ($, e) => {
     sent.push({ url: e.url, body: e.init?.body, headers: e.init?.headers })
     if (e.url.includes('/v1/commands')) {
-      if (served || commands.length === 0) return { value: { status: 204, ok: true, headers: {}, text: '' } }
-      served = true
-      return { value: ok(JSON.stringify({ commands })) }
+      if (pending.length === 0) return { value: { status: 204, ok: true, headers: {}, text: '' } }
+      return { value: ok(JSON.stringify({ commands: pending.splice(0) })) }
     }
     if (e.url.endsWith('/v1/permission')) return { value: ok(decision) }
     return { value: ok() }
@@ -70,6 +70,10 @@ function world(on: On, env: Record<string, string>, commands: unknown[] = []) {
     events,
     setDecision: (body: string) => {
       decision = body
+    },
+    /** Hands `more` to the next command poll, as a host does with a command it queues later. */
+    queue: (...more: unknown[]) => {
+      pending.push(...more)
     },
   }
 }
@@ -163,6 +167,38 @@ describe('event-bridge in a session', () => {
     const poll = w.sent.find(request => request.url.includes('/v1/commands'))
     expect(poll?.url).toBe('http://127.0.0.1:47800/v1/commands?session=s-1&tag=pane-7')
   })
+
+  // A /clear or a resume goes on in the same process under a new session id.
+  for (const reason of ['clear', 'resume'] as const) {
+    test(`keeps taking commands after a ${reason}, under the new session id`, async ($, on) => {
+      const w = world(on, HOST)
+      await $.session.start({ cwd: '/work', surface: null, isInteractive: true })
+      await $.classic.SessionStart({ source: 'startup', session_id: 's-1' })
+      await w.clock.advance(0)
+      await $.session.end({ reason, sessionId: 's-1', resume: { id: 's-1' } })
+      await $.classic.SessionStart({ source: reason, session_id: 's-2' })
+
+      w.queue({ id: 'c1', type: 'prompt', text: 'carry on' })
+      await w.clock.advance(MIN_POLL_INTERVAL_MS)
+      expect(w.prompts).toEqual(['carry on'])
+      const poll = w.sent.find(request => request.url.includes('session=s-2'))
+      expect(poll?.url).toBe('http://127.0.0.1:47800/v1/commands?session=s-2&tag=pane-7')
+    })
+  }
+
+  for (const reason of ['prompt_input_exit', 'other'] as const) {
+    test(`stops polling for commands when the session ends with ${reason}`, async ($, on) => {
+      const w = world(on, HOST)
+      await $.session.start({ cwd: '/work', surface: null, isInteractive: true })
+      await $.classic.SessionStart({ source: 'startup', session_id: 's-1' })
+      await w.clock.advance(0)
+      await $.session.end({ reason, sessionId: 's-1', resume: { id: 's-1' } })
+      const polls = () => w.sent.filter(request => request.url.includes('/v1/commands')).length
+      const before = polls()
+      await w.clock.advance(10_000)
+      expect(polls()).toBe(before)
+    })
+  }
 
   test('takes no commands without a token', async ($, on) => {
     const w = world(on, { CLAUDE_EVENTS_URL: 'http://127.0.0.1:47800' }, [{ id: 'c1', type: 'prompt', text: 'hi' }])

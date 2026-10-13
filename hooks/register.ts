@@ -109,8 +109,8 @@ export const register: Register = (on, options) => {
   on('session.end', async ($, e, next) => {
     outbox.emit('session.ended', sessionEndedData(e), e.sessionId)
     if (next.budget.remainingMs >= END_FLUSH_MIN_MS) await outbox.flushNow()
-    // A /clear goes on in the same process under a new session id.
-    if (e.reason !== 'clear') inbox.stop()
+    // A /clear or a resume goes on in the same process under a new session id.
+    if (e.reason !== 'clear' && e.reason !== 'resume') inbox.stop()
     inbox.currentTurnId = undefined
     return next(e)
   })
