@@ -19,7 +19,7 @@ the plugin's settings.
 | `CLAUDE_EVENTS_URL` | `url` | Base URL of the listener. Plain `http` only to `127.0.0.1`, `localhost` or `[::1]`; any other host needs `https`. No credentials, query or fragment. Unset or empty: the mod stays idle. |
 | `CLAUDE_EVENTS_TOKEN` | `token` | Shared secret, sent as `Authorization: Bearer <token>` on every request. Visible ASCII, at most 4096 characters. Without it the mod still sends events but takes no commands and asks no permissions. |
 | `CLAUDE_EVENTS_TAG` | (none) | The host's own label for this session, such as a pane id. Echoed on every event and on each command poll. At most 256 characters, no control characters. |
-| `CLAUDE_EVENTS_TOOLS` | `toolDetail` | `summary` (the default) cuts strings in tool inputs, results, prompts and answers to 2048 characters and arrays to 100 items, and says how much was cut. `full` sends them whole. |
+| `CLAUDE_EVENTS_TOOLS` | `toolDetail` | `summary` (the default) cuts strings in tool inputs, results, prompts and answers to 2048 characters and arrays to 100 items, and says how much was cut. `full` sends them whole, up to 1 MiB of JSON per event (see Events). |
 | `CLAUDE_EVENTS_PERMISSIONS` | `hostPermissions` | `host` lets the host decide tool calls that would otherwise ask the person; `off` overrides an option that turned it on. Needs the token. |
 
 A value the mod cannot use (a remote `http` URL, a token with spaces, an
@@ -28,8 +28,15 @@ saying why in the session's transcript.
 
 ## Events: `POST {url}/v1/events`
 
-Body: `{ "events": [Envelope, ...] }`, at most 200 per request. Answer with
-any `2xx`. Events from one process arrive in order, one request at a time.
+Body: `{ "events": [Envelope, ...] }`, at most 200 per request and 3 MiB
+(3,145,728 characters) of JSON. Answer with any `2xx`. Events from one
+process arrive in order, one request at a time.
+
+An event whose JSON is longer than 1 MiB (1,048,576 characters), as one can
+be with `full` detail, is sent with its `data` cut the way `summary` cuts it.
+One still longer than that is dropped and counted in an `outbox.dropped`
+event. Claude Code refuses a request body over 4 MiB, so neither could be
+sent whole.
 
 ```json
 {
@@ -69,8 +76,9 @@ and what the previous boot had not had acknowledged goes on:
 
 - The new boot first sends the previous boot's unacknowledged events, each
   under the previous `boot` and its own `seq`, then its own events.
-- At most 200 of the previous boot's own events are carried. The rest are
-  reported in an `outbox.dropped` event under that boot.
+- At most 200 of the previous boot's own events, and 3 MiB of their JSON,
+  are carried. The rest are reported in an `outbox.dropped` event under that
+  boot.
 - A batch that was in flight at the reload is sent again, so an event can
   arrive twice. Drop an event whose `boot` and `seq` you already have.
 
@@ -111,6 +119,9 @@ signal or a logout. Query parameters:
   kept across a hot reload.
 
 Hold the request until a command is ready or about 25 seconds have passed.
+Keep each answer under 4 MiB (4,194,304 characters): Claude Code cuts a
+longer one, and the mod refuses what is left as not JSON, with one
+`command.result` whose `id` is null.
 
 | Answer | Meaning |
 | --- | --- |
@@ -156,7 +167,9 @@ Hold the request until you decide, then answer `200` with one of:
 - `{ "decision": "ask" }`: you defer, and the person's own dialog shows.
 
 The mod waits at most 30 seconds. No answer in that time, an error status, or
-a body it cannot read all count as `ask`. An `allow` never goes past an
+a body it cannot read all count as `ask`. So does an ask too long for Claude
+Code to send, over 4 MiB, which `full` detail can make: the host is not asked
+at all. An `allow` never goes past an
 organization's ceiling for that tool: where the organization caps a tool at
 `ask`, the dialog still shows.
 

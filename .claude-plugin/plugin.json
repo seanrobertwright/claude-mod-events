@@ -19,7 +19,7 @@
     "toolDetail": {
       "type": "string",
       "title": "Tool detail",
-      "description": "summary cuts long strings in tool inputs and results to 2 KB; full sends them whole. CLAUDE_EVENTS_TOOLS overrides it.",
+      "description": "summary cuts long strings in tool inputs and results to 2 KB; full sends them whole, up to 1 MiB per event. CLAUDE_EVENTS_TOOLS overrides it.",
       "options": ["summary", "full"],
       "default": "summary"
     },

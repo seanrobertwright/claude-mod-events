@@ -14,6 +14,13 @@ export const CONFIG: Config = {
 
 export type Request = { readonly url: string; readonly init: HttpInit | undefined }
 
+/**
+ * Claude Code's own line, in characters, as measured on 2.1.296: a longer
+ * request body is refused before it is sent, a longer response is cut to it,
+ * and `$.state` refuses a value whose JSON is longer.
+ */
+export const ENGINE_TEXT_LIMIT = 4 * 1024 * 1024
+
 export type Answer = (request: Request) => HttpResponse | Promise<HttpResponse>
 
 export function reply(status: number, text = ''): HttpResponse {
@@ -37,12 +44,18 @@ export function fakePorts(answer: Answer = () => reply(204)) {
   const aborts: string[] = []
   const outboxCarries: OutboxCarry[] = []
   const inboxCarries: InboxCarry[] = []
+  let refusedCarries = 0
 
   const ports: Ports = {
     fetch: async (url, init) => {
+      const length = init?.body?.length ?? 0
+      if (length > ENGINE_TEXT_LIMIT) {
+        throw new Error(`a request body of ${length} characters is over the ${ENGINE_TEXT_LIMIT}-character limit`)
+      }
       const request = { url, init }
       requests.push(request)
-      return host(request)
+      const response = await host(request)
+      return { ...response, text: response.text.slice(0, ENGINE_TEXT_LIMIT) }
     },
     after: (ms, fn) => {
       const timer = { at: now + ms, fn, cancelled: false }
@@ -68,7 +81,9 @@ export function fakePorts(answer: Answer = () => reply(204)) {
       aborts.push(turnId)
     },
     carryOutbox: carry => {
-      outboxCarries.push(JSON.parse(JSON.stringify(carry)) as OutboxCarry)
+      const json = JSON.stringify(carry)
+      if (json.length > ENGINE_TEXT_LIMIT) refusedCarries += 1
+      else outboxCarries.push(JSON.parse(json) as OutboxCarry)
     },
     carryInbox: carry => {
       inboxCarries.push(carry)
@@ -115,6 +130,8 @@ export function fakePorts(answer: Answer = () => reply(204)) {
     /** Each carry written, as `$.state` would hold it. */
     outboxCarries,
     inboxCarries,
+    /** Carries `$.state` refused for their length. */
+    refusedCarries: () => refusedCarries,
     advance,
     settle,
     posted,
