@@ -101,18 +101,26 @@ function short(value, limit = 160) {
   return text.length > limit ? `${text.slice(0, limit)}…` : text
 }
 
+/** The boot and seq of each event printed, so a batch sent again after a hot reload prints once. */
+const printed = new Set()
+const PRINTED_MAX = 10_000
+
 function printEvent(event) {
+  const key = `${event.boot}:${event.seq}`
+  if (printed.has(key)) return
+  printed.add(key)
+  if (printed.size > PRINTED_MAX) printed.delete(printed.values().next().value)
   const where = [event.sessionId?.slice(0, 8), event.tag].filter(Boolean).join(' ')
   console.log(`#${event.seq} ${event.type} [${where}] ${short(event.data)}`)
 }
 
 function deliver() {
-  for (const poll of waitingPolls) {
-    if (commands.length === 0) return
-    waitingPolls.delete(poll)
-    clearTimeout(poll.timer)
-    send(poll.res, 200, { commands: commands.splice(0, commands.length) })
-  }
+  // The newest poll: just after a hot reload the previous boot's can still be open.
+  const poll = [...waitingPolls].at(-1)
+  if (commands.length === 0 || poll === undefined) return
+  waitingPolls.delete(poll)
+  clearTimeout(poll.timer)
+  send(poll.res, 200, { commands: commands.splice(0, commands.length) })
 }
 
 function enqueue(command) {

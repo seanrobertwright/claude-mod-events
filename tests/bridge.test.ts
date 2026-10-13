@@ -164,8 +164,9 @@ describe('event-bridge in a session', () => {
       { id: 'c1', ok: true },
       { id: 'c2', ok: true },
     ])
+    // The poll names the boot its events carry, so a host can tell a reload's polls apart.
     const poll = w.sent.find(request => request.url.includes('/v1/commands'))
-    expect(poll?.url).toBe('http://127.0.0.1:47800/v1/commands?session=s-1&tag=pane-7')
+    expect(poll?.url).toBe(`http://127.0.0.1:47800/v1/commands?session=s-1&tag=pane-7&boot=${w.events()[0]?.boot}`)
   })
 
   // A /clear or a resume goes on in the same process under a new session id.
@@ -182,7 +183,7 @@ describe('event-bridge in a session', () => {
       await w.clock.advance(MIN_POLL_INTERVAL_MS)
       expect(w.prompts).toEqual(['carry on'])
       const poll = w.sent.find(request => request.url.includes('session=s-2'))
-      expect(poll?.url).toBe('http://127.0.0.1:47800/v1/commands?session=s-2&tag=pane-7')
+      expect(poll?.url).toBe(`http://127.0.0.1:47800/v1/commands?session=s-2&tag=pane-7&boot=${w.events()[0]?.boot}`)
     })
   }
 

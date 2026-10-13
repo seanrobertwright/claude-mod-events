@@ -2,6 +2,7 @@
   "name": "event-bridge",
   "version": "0.1.0",
   "description": "Sends session, turn, attention and tool events to a host program over HTTP, and takes prompts and interrupts back.",
+  "types": "./types/index.d.ts",
   "userConfig": {
     "url": {
       "type": "string",

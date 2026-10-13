@@ -60,6 +60,20 @@ How the mod treats your answer:
 | A `4xx` other than `408` and `429` | The batch is dropped. The mod writes one line to the transcript the first time. |
 | Anything else: no answer, `408`, `429`, `5xx` | The batch is kept and retried, waiting 250 ms and doubling up to 5 s. The mod holds at most 1000 events; past that it drops the oldest and reports the count in an `outbox.dropped` event. |
 
+### After a hot reload
+
+Claude Code reloads the mod when its files change in a session that watches
+them, when `/reload-plugins` finds them changed, when its options change, and
+when it restarts a lost hooks worker. The mod starts again under a new `boot`,
+and what the previous boot had not had acknowledged goes on:
+
+- The new boot first sends the previous boot's unacknowledged events, each
+  under the previous `boot` and its own `seq`, then its own events.
+- At most 200 of the previous boot's own events are carried. The rest are
+  reported in an `outbox.dropped` event under that boot.
+- A batch that was in flight at the reload is sent again, so an event can
+  arrive twice. Drop an event whose `boot` and `seq` you already have.
+
 ### Event types
 
 | `type` | When | `data` |
@@ -83,12 +97,18 @@ slow to answer may miss that last batch.
 
 The mod long-polls this endpoint while the session runs, and only when a
 token is set. Polling goes on across `/clear` and a resume,
-under the new session id. It stops when the session ends for any other reason:
-an exit, a finished `-p` run, a signal or a logout. Query parameters:
+under the new session id, and across a hot reload, under the new boot. It stops
+when the session ends for any other reason: an exit, a finished `-p` run, a
+signal or a logout. Query parameters:
 
 - `session`: the current session id.
 - `tag`: `CLAUDE_EVENTS_TAG`, when set.
-- `after`: the id of the last command the mod received, when there was one.
+- `boot`: the `boot` the mod's events carry. Just after a hot reload the
+  previous boot's poll can still be open beside the new boot's, and a command
+  given to it is lost. When polls from two boots are open, send commands to
+  the poll of the boot that appeared later.
+- `after`: the id of the last command the mod received, when there was one,
+  kept across a hot reload.
 
 Hold the request until a command is ready or about 25 seconds have passed.
 

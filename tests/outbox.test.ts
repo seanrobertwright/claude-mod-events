@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { BACKOFF_MAX_MS, BACKOFF_START_MS, BATCH_SIZE, FLUSH_DELAY_MS, Outbox, QUEUE_CAP } from '../hooks/outbox'
+import { BACKOFF_MAX_MS, BACKOFF_START_MS, BATCH_SIZE, CARRY_LIMIT, FLUSH_DELAY_MS, Outbox, QUEUE_CAP, parseOutboxCarry } from '../hooks/outbox'
 import { CONFIG, fakePorts, reply } from './fakes'
 
 describe('Outbox', () => {
@@ -179,5 +179,112 @@ describe('Outbox', () => {
     expect(outbox.isOff).toBe(true)
     expect(outbox.queued).toBe(0)
     expect(host.requests.length).toBe(0)
+  })
+})
+
+describe('Outbox across a hot reload', () => {
+  test('carries everything the host has not acknowledged, a POST in flight included', async () => {
+    let release: (() => void) | undefined
+    const host = fakePorts(
+      () =>
+        new Promise(resolve => {
+          release = () => resolve(reply(200))
+        }),
+    )
+    const outbox = new Outbox()
+    outbox.start(host.ports, CONFIG)
+    outbox.emit('turn.started', {})
+    outbox.emit('turn.completed', {})
+    await host.advance(FLUSH_DELAY_MS)
+    expect(host.requests.length).toBe(1)
+    outbox.emit('attention.notification', {})
+    await host.settle()
+    const carry = host.outboxCarries.at(-1)
+    expect(carry?.boot).toBe(outbox.bootId)
+    expect(carry?.events.map(event => [event.seq, event.type])).toEqual([
+      [1, 'turn.started'],
+      [2, 'turn.completed'],
+      [3, 'attention.notification'],
+    ])
+    expect([carry?.dropped, carry?.noticeSeq]).toEqual([0, null])
+
+    release?.()
+    await host.advance(0)
+    release?.()
+    await host.advance(0)
+    expect(host.outboxCarries.at(-1)?.events).toEqual([])
+  })
+
+  test('counts its own events past the carry limit as dropped, under the next seq', async () => {
+    const host = fakePorts(() => reply(503))
+    const outbox = new Outbox()
+    outbox.start(host.ports, CONFIG)
+    for (let i = 0; i < CARRY_LIMIT + 3; i++) outbox.emit('tool.started', { i })
+    await host.settle()
+    const carry = host.outboxCarries.at(-1)
+    expect(carry?.events.length).toBe(CARRY_LIMIT)
+    expect(carry?.events.at(-1)?.seq).toBe(CARRY_LIMIT)
+    expect([carry?.dropped, carry?.noticeSeq]).toEqual([3, CARRY_LIMIT + 3 + 1])
+  })
+
+  test('sends an adopted carry first, under its own boot, and never trims it', async () => {
+    let up = false
+    const host = fakePorts(() => (up ? reply(200) : reply(503)))
+    const outbox = new Outbox()
+    outbox.sessionId = 's1'
+    const old = (seq: number, type: 'turn.started' | 'turn.completed') =>
+      ({ v: 1, boot: 'old-boot', seq, ts: 1, sessionId: 's1', tag: undefined, type, data: {} }) as const
+    outbox.start(host.ports, CONFIG, {
+      boot: 'old-boot',
+      events: [old(5, 'turn.started'), old(6, 'turn.completed')],
+      dropped: 2,
+      noticeSeq: 7,
+    })
+    for (let i = 0; i < QUEUE_CAP; i++) outbox.emit('tool.started', { i })
+    // The two carried events and their notice take three places, so three of this boot's own go.
+    expect(outbox.queued).toBe(QUEUE_CAP)
+    expect(outbox.droppedCount).toBe(3)
+
+    up = true
+    await host.advance(BACKOFF_MAX_MS)
+    const events = host.posted()
+    expect(events.slice(0, 4).map(event => [event.boot === 'old-boot' ? 'old' : 'own', event.seq, event.type])).toEqual([
+      ['old', 7, 'outbox.dropped'],
+      ['old', 5, 'turn.started'],
+      ['old', 6, 'turn.completed'],
+      ['own', QUEUE_CAP + 1, 'outbox.dropped'],
+    ])
+    expect([events[0]?.data, events[3]?.data]).toEqual([{ count: 2 }, { count: 3 }])
+    expect(events.every(event => event.tag === CONFIG.tag)).toBe(true)
+    expect(events.filter(event => event.type === 'tool.started').length).toBe(QUEUE_CAP - 3)
+  })
+
+  test('reads back the carry it writes, and refuses one it cannot trust', async () => {
+    const host = fakePorts(() => reply(503))
+    const outbox = new Outbox()
+    outbox.start(host.ports, CONFIG)
+    outbox.emit('turn.started', { turnId: 't1' })
+    await host.settle()
+    expect(parseOutboxCarry(host.outboxCarries.at(-1))?.events.map(event => event.type)).toEqual(['turn.started'])
+
+    const event = { v: 1, boot: 'b', seq: 1, ts: 1, type: 'turn.started', data: {} }
+    const carry = { boot: 'b', events: [event], dropped: 0, noticeSeq: null }
+    expect(parseOutboxCarry(carry)).toEqual({ ...carry, events: [{ ...event, sessionId: undefined, tag: undefined }] })
+    for (const bad of [
+      null,
+      [],
+      { ...carry, boot: '' },
+      { ...carry, dropped: -1 },
+      { ...carry, dropped: 2, noticeSeq: null },
+      { ...carry, noticeSeq: 4 },
+      { ...carry, events: [{ ...event, v: 2 }] },
+      { ...carry, events: [{ ...event, seq: 0 }] },
+      { ...carry, events: [{ ...event, type: 'turn.exploded' }] },
+      { ...carry, events: [{ ...event, data: [] }] },
+      { ...carry, events: [{ ...event, sessionId: 7 }] },
+      Object.create(carry) as object,
+    ]) {
+      expect(parseOutboxCarry(bad)).toBe(undefined)
+    }
   })
 })

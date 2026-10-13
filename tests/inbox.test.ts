@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { Inbox, MAX_COMMANDS_PER_POLL, MIN_POLL_INTERVAL_MS, REFUSED_RETRY_MS, parseCommand, parseCommands } from '../hooks/inbox'
+import { Inbox, MAX_COMMANDS_PER_POLL, MAX_ID_LENGTH, MIN_POLL_INTERVAL_MS, REFUSED_RETRY_MS, parseCommand, parseCommands, parseInboxCarry } from '../hooks/inbox'
 import { Outbox } from '../hooks/outbox'
 import { CONFIG, fakePorts, reply } from './fakes'
 
@@ -74,12 +74,12 @@ describe('Inbox', () => {
     expect(host.requests.length).toBe(0)
   })
 
-  test('polls with the session, tag and token, and spaces out empty answers', async () => {
-    const { host, inbox } = setup(() => reply(204))
+  test('polls with the session, tag, boot and token, and spaces out empty answers', async () => {
+    const { host, outbox, inbox } = setup(() => reply(204))
     inbox.start(host.ports, CONFIG)
     await host.advance(0)
     expect(host.requests.length).toBe(1)
-    expect(host.requests[0]?.url).toBe('http://127.0.0.1:47800/v1/commands?session=s1&tag=pane-7')
+    expect(host.requests[0]?.url).toBe(`http://127.0.0.1:47800/v1/commands?session=s1&tag=pane-7&boot=${outbox.bootId}`)
     expect(host.requests[0]?.init?.headers).toEqual({ authorization: 'Bearer secret' })
     await host.advance(MIN_POLL_INTERVAL_MS - 1)
     expect(host.requests.length).toBe(1)
@@ -154,5 +154,48 @@ describe('Inbox', () => {
     inbox.stop()
     await host.advance(10_000)
     expect(host.requests.length).toBe(1)
+  })
+})
+
+describe('Inbox across a hot reload', () => {
+  test('takes the running turn and the last command id from a carry', async () => {
+    const { host, inbox } = setup(serveOnce([{ id: 'c10', type: 'interrupt' }]))
+    inbox.start(host.ports, CONFIG, { turnId: 'turn-3', lastId: 'c9' })
+    await host.advance(0)
+    inbox.stop()
+    expect(host.requests[0]?.url).toContain('after=c9')
+    expect(host.aborts).toEqual(['turn-3'])
+  })
+
+  test('trusts a turn this load saw over the carry', async () => {
+    const { host, inbox } = setup(serveOnce([{ id: 'c1', type: 'interrupt' }]))
+    // The carried turn ended before the poll started: turn.complete cleared it.
+    inbox.currentTurnId = undefined
+    inbox.start(host.ports, CONFIG, { turnId: 'turn-3', lastId: null })
+    await host.advance(0)
+    inbox.stop()
+    await host.advance(1000)
+    expect(host.aborts).toEqual([])
+    expect(host.posted().map(event => event.data)).toEqual([{ id: 'c1', ok: false, error: 'no turn is running' }])
+  })
+
+  test('keeps the running turn and the last command id in its carry', async () => {
+    const { host, inbox } = setup(serveOnce([{ id: 'c1', type: 'toast', text: 'hi' }]))
+    inbox.start(host.ports, CONFIG)
+    inbox.currentTurnId = 'turn-1'
+    expect(host.inboxCarries.at(-1)).toEqual({ turnId: 'turn-1', lastId: null })
+    await host.advance(0)
+    expect(host.inboxCarries.at(-1)).toEqual({ turnId: 'turn-1', lastId: 'c1' })
+    inbox.currentTurnId = undefined
+    expect(host.inboxCarries.at(-1)).toEqual({ turnId: null, lastId: 'c1' })
+    inbox.stop()
+  })
+
+  test('refuses a carry it cannot trust', () => {
+    expect(parseInboxCarry({ turnId: 't', lastId: null })).toEqual({ turnId: 't', lastId: null })
+    const tooLong = 'x'.repeat(MAX_ID_LENGTH + 1)
+    for (const bad of [null, {}, { turnId: '', lastId: null }, { turnId: 't', lastId: 4 }, { turnId: null, lastId: tooLong }]) {
+      expect(parseInboxCarry(bad)).toBe(undefined)
+    }
   })
 })

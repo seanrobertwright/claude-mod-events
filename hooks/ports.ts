@@ -1,4 +1,5 @@
 import type { HttpInit, HttpResponse, PromptSubmitArgs, PromptSubmitResult, Timer, UiLogSink } from 'claude-code'
+import type { InboxCarry, OutboxCarry } from '../types'
 
 /**
  * The engine calls the outbox, inbox and permission ask make, as plain
@@ -15,4 +16,8 @@ export type Ports = {
   readonly toast: (text: string) => void
   readonly submitPrompt: (args: PromptSubmitArgs) => Promise<PromptSubmitResult>
   readonly abortTurn: (turnId: string) => Promise<void>
+  /** Keeps what the outbox has not had acknowledged in `$.state`, for the load a hot reload starts. */
+  readonly carryOutbox: (carry: OutboxCarry) => void
+  /** Keeps the running turn and the last command id in `$.state`, likewise. */
+  readonly carryInbox: (carry: InboxCarry) => void
 }

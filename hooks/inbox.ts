@@ -1,5 +1,7 @@
 import type { Timer } from 'claude-code'
+import type { InboxCarry } from '../types'
 import type { Config } from './config'
+import { field, isRecord } from './events'
 import { type Outbox, authHeaders } from './outbox'
 import type { Ports } from './ports'
 
@@ -20,14 +22,6 @@ export type Command =
   | { readonly id: string; readonly type: 'toast'; readonly text: string }
 
 export type CommandRejection = { readonly id: string | undefined; readonly error: string }
-
-function isRecord(value: unknown): value is { readonly [key: string]: unknown } {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function field(record: { readonly [key: string]: unknown }, key: string): unknown {
-  return Object.hasOwn(record, key) ? record[key] : undefined
-}
 
 /** One command from the host, or why it is refused. */
 export function parseCommand(raw: unknown): { ok: true; command: Command } | { ok: false; rejection: CommandRejection } {
@@ -85,9 +79,26 @@ export function parseCommands(body: string): { commands: Command[]; rejections: 
   return { commands, rejections }
 }
 
+function isIdOrNull(value: unknown): value is string | null {
+  return value === null || (typeof value === 'string' && value !== '' && value.length <= MAX_ID_LENGTH)
+}
+
+/** A carry read back from `$.state`, or undefined when it is not one. */
+export function parseInboxCarry(raw: unknown): InboxCarry | undefined {
+  if (!isRecord(raw)) return undefined
+  const turnId = field(raw, 'turnId')
+  const lastId = field(raw, 'lastId')
+  if (!isIdOrNull(turnId) || !isIdOrNull(lastId)) return undefined
+  return { turnId, lastId }
+}
+
 /**
  * Long-polls the host for commands and runs them. Each poll's timer starts
  * the next, so the loop outlives any one hook. It runs only with a token.
+ *
+ * While it runs it keeps the running turn and the last command id in
+ * `$.state`, through `ports.carryInbox`, so the copy a hot reload starts can
+ * still interrupt that turn and poll from that command.
  */
 export class Inbox {
   private ports: Ports | undefined
@@ -96,9 +107,9 @@ export class Inbox {
   private running = false
   private lastId: string | undefined
   private backoffMs = 0
-
-  /** The main loop's running turn, set by `turn.start` and cleared by its `turn.complete`. */
-  currentTurnId: string | undefined
+  private turnId: string | undefined
+  /** Whether this load saw a turn start or end, which outranks what an earlier load left. */
+  private turnSeen = false
 
   constructor(private readonly outbox: Outbox) {}
 
@@ -106,11 +117,28 @@ export class Inbox {
     return this.running
   }
 
-  start(ports: Ports, config: Config): void {
+  /** The main loop's running turn, set by `turn.start` and cleared by its `turn.complete`. */
+  get currentTurnId(): string | undefined {
+    return this.turnId
+  }
+
+  set currentTurnId(turnId: string | undefined) {
+    this.turnId = turnId
+    this.turnSeen = true
+    this.carry()
+  }
+
+  /** Starts polling. `carry` is what an earlier load of the module left. */
+  start(ports: Ports, config: Config, carry?: InboxCarry): void {
     if (this.running || config.token === undefined) return
     this.ports = ports
     this.config = config
     this.running = true
+    if (carry !== undefined) {
+      if (!this.turnSeen) this.turnId = carry.turnId ?? undefined
+      this.lastId ??= carry.lastId ?? undefined
+    }
+    this.carry()
     this.schedule(0)
   }
 
@@ -118,6 +146,10 @@ export class Inbox {
     this.running = false
     this.timer?.cancel()
     this.timer = undefined
+  }
+
+  private carry(): void {
+    if (this.running) this.ports?.carryInbox({ turnId: this.turnId ?? null, lastId: this.lastId ?? null })
   }
 
   private schedule(delayMs: number): void {
@@ -136,6 +168,7 @@ export class Inbox {
     const params = new URLSearchParams()
     if (this.outbox.sessionId !== undefined) params.set('session', this.outbox.sessionId)
     if (config.tag !== undefined) params.set('tag', config.tag)
+    params.set('boot', this.outbox.bootId)
     if (this.lastId !== undefined) params.set('after', this.lastId)
 
     const startedAt = await ports.now()
@@ -162,6 +195,7 @@ export class Inbox {
         this.lastId = command.id
         this.run(ports, command)
       }
+      if (commands.length > 0) this.carry()
       const elapsed = (await ports.now()) - startedAt
       this.schedule(commands.length === 0 && elapsed < MIN_POLL_INTERVAL_MS ? MIN_POLL_INTERVAL_MS - elapsed : 0)
       return
