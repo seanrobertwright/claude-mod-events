@@ -120,11 +120,16 @@ slow to answer may miss that last batch.
 
 ## Commands: `GET {url}/v1/commands`
 
-The mod long-polls this endpoint while the session runs, and only when a
-token is set. Polling goes on across `/clear` and a resume,
-under the new session id, and across a hot reload, under the new boot. It stops
-when the session ends for any other reason: an exit, a finished `-p` run, a
-signal or a logout. Query parameters:
+The mod long-polls this endpoint while an interactive session runs, and only
+when a token is set. A headless session, a `claude -p` run or one the SDK
+drives, never polls and takes no commands: Claude Code holds such a run open
+until the request the mod has out comes back, so a held poll would delay its
+exit by up to the rest of the hold. It still sends its events, and its
+permission asks when host permissions are on.
+
+Polling goes on across `/clear` and a resume, under the new session id, and
+across a hot reload, under the new boot. It stops when the session ends for any
+other reason: an exit, a signal or a logout. Query parameters:
 
 - `session`: the current session id.
 - `tag`: `CLAUDE_EVENTS_TAG`, when set.

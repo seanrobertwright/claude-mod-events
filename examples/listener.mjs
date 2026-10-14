@@ -9,6 +9,8 @@
 //
 // It serves one session at a time: commands go to whichever session polls
 // next. A real host routes them by the `session` and `tag` query parameters.
+// Only an interactive session polls: a `claude -p` run sends its events and
+// takes no commands.
 
 import { createServer } from 'node:http'
 import { randomBytes, timingSafeEqual } from 'node:crypto'

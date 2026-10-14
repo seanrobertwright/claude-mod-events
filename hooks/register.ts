@@ -37,6 +37,8 @@ type Bridge = {
   config: Config | undefined
   /** The variables this load runs with, once read; kept in `$.state` for the next load. */
   env: RawEnv | undefined
+  /** What the inbox of the load before left, for this load's inbox to go on from. */
+  inboxCarry: InboxCarry | undefined
   starting: Promise<void> | undefined
 }
 
@@ -131,10 +133,10 @@ async function readConfig($: EngineInterface, bridge: Bridge): Promise<void> {
     return
   }
   bridge.config = result.config
+  bridge.inboxCarry = carried.inbox
   for (const warning of result.warnings) ports.log(warning, 'transcript')
   bridge.outbox.sessionId ??= await $.session.id()
   bridge.outbox.start(ports, result.config, carried.outbox)
-  bridge.inbox.start(ports, result.config, carried.inbox)
 }
 
 /**
@@ -148,12 +150,24 @@ function passThrough<E, R>(_$: unknown, e: E, next: (e: E) => R): R {
 
 export const register: Register = (on, options) => {
   const outbox = new Outbox()
-  const bridge: Bridge = { options, outbox, inbox: new Inbox(outbox), config: undefined, env: undefined, starting: undefined }
+  const bridge: Bridge = {
+    options,
+    outbox,
+    inbox: new Inbox(outbox),
+    config: undefined,
+    env: undefined,
+    inboxCarry: undefined,
+    starting: undefined,
+  }
   const { inbox } = bridge
   const detail = (): ToolDetail => bridge.config?.toolDetail ?? 'summary'
 
+  // The engine fires this on every load of the module, a hot reload included.
+  // Only a session with a person at the prompt polls for commands: a headless
+  // run (`-p`, the SDK) does not exit until the poll it holds comes back.
   on('session.start', async ($, e, next) => {
     await start($, bridge)
+    if (e.isInteractive && bridge.config !== undefined) inbox.start(portsFor($), bridge.config, bridge.inboxCarry)
     return next(e)
   })
 

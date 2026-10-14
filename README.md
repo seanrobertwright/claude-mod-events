@@ -8,7 +8,8 @@ starts `claude`, or a terminal multiplexer that runs sessions in panes.
   usage), notifications and permission dialogs, and every tool call with its
   result, sent as batched JSON to an HTTP listener the host runs.
 - **Commands in.** The host can submit a prompt, interrupt the running turn, or
-  show a toast in the session.
+  show a toast in an interactive session. A headless run (`claude -p`, the SDK)
+  sends events but takes no commands, so no held poll delays its exit.
 - **Permissions, if you allow it.** The host can allow or deny a tool call that
   would otherwise ask the person.
 

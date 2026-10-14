@@ -22,7 +22,7 @@ function reply(status: number, text = ''): HttpResponse {
  * its timers dropped, its `$` calls never settling. `$.state` is held here
  * across loads, as the engine holds it, and so is the host's listener.
  */
-function reloadingSession(variables: Record<string, string>) {
+function reloadingSession(variables: Record<string, string>, { isInteractive = true } = {}) {
   const env = new Map(Object.entries(variables))
   let now = 0
   let load = 0
@@ -108,7 +108,7 @@ function reloadingSession(variables: Record<string, string>) {
     }) as unknown as On
     await register(on, {})
     $ = engineFor(load)
-    await fire('session.start', { cwd: '/work', surface: null, isInteractive: true })
+    await fire('session.start', { cwd: '/work', surface: isInteractive ? 'terminal' : null, isInteractive })
   }
 
   return {
@@ -255,6 +255,22 @@ describe('event-bridge across a hot reload', () => {
     expect(after.length).toBe(1)
     expect(after[0]?.searchParams.get('boot')).not.toBe(bootA)
     expect(after[0]?.searchParams.get('after')).toBe('c1')
+  })
+
+  test('takes no commands after a reload of a headless run, and still sends its events', async () => {
+    const w = reloadingSession(HOST, { isInteractive: false })
+    await w.start()
+    await w.advance(200)
+
+    await w.reload()
+    await w.fire('turn.start', { text: 'go', turnId: 'turn-1' })
+    await w.advance(10_000)
+
+    expect(w.polls).toEqual([])
+    expect(byBoot(w.delivered)).toEqual([
+      ['A', 1, 'session.started'],
+      ['B', 1, 'turn.started'],
+    ])
   })
 })
 

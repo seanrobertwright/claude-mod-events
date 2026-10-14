@@ -161,7 +161,7 @@ describe('event-bridge in a session', () => {
       { id: 'c1', type: 'interrupt' },
       { id: 'c2', type: 'prompt', text: 'now run the tests' },
     ])
-    await $.session.start({ cwd: '/work', surface: null, isInteractive: false })
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
     await $.classic.SessionStart({ source: 'startup', session_id: 's-1' })
     await $.turn.start({ text: 'long job', turnId: 'turn-1' })
     await w.clock.advance(0)
@@ -212,11 +212,45 @@ describe('event-bridge in a session', () => {
 
   test('takes no commands without a token', async ($, on) => {
     const w = world(on, { CLAUDE_EVENTS_URL: 'http://127.0.0.1:47800' }, [{ id: 'c1', type: 'prompt', text: 'hi' }])
-    await $.session.start({ cwd: '/work', surface: null, isInteractive: false })
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
     await w.clock.advance(5000)
     expect(w.sent.some(request => request.url.includes('/v1/commands'))).toBe(false)
     expect(w.prompts).toEqual([])
   })
+
+  // A headless run does not exit until a command poll it holds comes back.
+  test('takes no commands in a headless run, and still sends its events and the end flush', async ($, on) => {
+    const w = world(on, HOST, [{ id: 'c1', type: 'prompt', text: 'hi' }])
+    await $.classic.SessionStart({ source: 'startup', session_id: 's-1' })
+    await $.session.start({ cwd: '/work', surface: null, isInteractive: false })
+    await $.turn.start({ text: 'Reply with just: ok', turnId: 'turn-1' })
+    await $.turn.complete({ turnId: 'turn-1', reason: 'answer', answer: 'ok', durationMs: 40, isAborted: false })
+    await w.clock.advance(10_000)
+    await $.session.end({ reason: 'other', sessionId: 's-1', resume: { id: 's-1' } })
+
+    expect(w.sent.some(request => request.url.includes('/v1/commands'))).toBe(false)
+    expect(w.prompts).toEqual([])
+    expect(w.events().map(event => event.type)).toEqual(['session.started', 'turn.started', 'turn.completed', 'session.ended'])
+    expect(w.sent.every(request => request.headers?.authorization === 'Bearer secret')).toBe(true)
+  })
+
+  // Either start hook can be the one that reads the config.
+  for (const order of ['session.start first', 'SessionStart first'] as const) {
+    test(`polls for commands in an interactive session, ${order}`, async ($, on) => {
+      const w = world(on, HOST, [{ id: 'c1', type: 'toast', text: 'hello' }])
+      const sessionStart = () => $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+      const classicStart = () => $.classic.SessionStart({ source: 'startup', session_id: 's-1' })
+      if (order === 'session.start first') {
+        await sessionStart()
+        await classicStart()
+      } else {
+        await classicStart()
+        await sessionStart()
+      }
+      await w.clock.advance(200)
+      expect(w.events().filter(event => event.type === 'command.result').map(event => event.data)).toEqual([{ id: 'c1', ok: true }])
+    })
+  }
 
   test('lets the host decide an ask only when host permissions are on', async ($, on) => {
     const w = world(on, { ...HOST, CLAUDE_EVENTS_PERMISSIONS: 'host' })
