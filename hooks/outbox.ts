@@ -1,19 +1,32 @@
 import type { Timer } from 'claude-code'
 import type { OutboxCarry } from '../types'
 import type { Config } from './config'
-import { type Envelope, type EventData, type EventType, field, isRecord, newBootId, nowMs, parseEnvelope } from './events'
+import { type Envelope, type EventData, type EventType, field, isRecord, newBootId, nowMs, parseEnvelope, toWire } from './events'
 import type { Ports } from './ports'
 
 /** Events held while the host is unreachable; past it the oldest go. */
 export const QUEUE_CAP = 1000
 /** Events per POST. */
 export const BATCH_SIZE = 200
+/*
+ * Claude Code refuses a request body longer than 4 MiB of characters
+ * (4,194,304) before it is sent, and `$.state` a value whose JSON is longer,
+ * as measured on 2.1.296. The limits below keep well under that.
+ */
+/** Characters of JSON per POST, the tag stamped on each event included. */
+export const MAX_BATCH_CHARS = 3 * 1024 * 1024
+/** Characters of JSON one event may take, `tag` aside; a longer one is cut to summary detail, or dropped if that is not enough. */
+export const MAX_EVENT_CHARS = 1024 * 1024
+/** Room kept in each POST for the body around the events and a drop notice. */
+const BATCH_OVERHEAD_CHARS = 1024
 /**
  * How many events a carry holds. A load's own events fill what an earlier
- * load's leave of it, and those past it count as dropped; an earlier load's
- * events are kept even past it.
+ * load's leave of it and of MAX_CARRY_CHARS, and those past either count as
+ * dropped; an earlier load's events are kept even past them.
  */
 export const CARRY_LIMIT = BATCH_SIZE
+/** Characters of JSON a carry's events may take, likewise. */
+export const MAX_CARRY_CHARS = 3 * 1024 * 1024
 /** How long an emit waits before its batch goes, so a burst shares one POST. */
 export const FLUSH_DELAY_MS = 100
 export const BACKOFF_START_MS = 250
@@ -68,12 +81,15 @@ export function parseOutboxCarry(raw: unknown): Carry | undefined {
  *
  * A hot reload starts a fresh copy, so once on it keeps what the host has not
  * acknowledged in `$.state`, through `ports.carryOutbox`: the events up to
- * CARRY_LIMIT and a count of the rest. The copy the reload starts is handed
+ * CARRY_LIMIT and MAX_CARRY_CHARS, and a count of the rest. The copy the reload starts is handed
  * that carry and sends it first, each event under its own boot and seq.
  */
 export class Outbox {
   private readonly boot = newBootId()
+  /** Every event here fits MAX_EVENT_CHARS, so any one of them makes a batch on its own. */
   private queue: Envelope[] = []
+  /** The length of each event's JSON, `tag` aside, worked out once. */
+  private readonly lengths = new WeakMap<Envelope, number>()
   /** The POST in flight, as sent: unacknowledged until it lands. */
   private sending: Envelope[] = []
   /** The count of the drop notice in that POST, or 0. */
@@ -115,7 +131,10 @@ export class Outbox {
 
   emit(type: EventType, data: EventData, sessionId: string | undefined = this.sessionId): void {
     if (this.state === 'off') return
-    this.queue.push(this.envelope(type, data, sessionId))
+    const event = this.fit(this.envelope(type, data, sessionId))
+    // Too long even when cut: its seq is the gap the drop notice explains.
+    if (event === undefined) this.dropped += 1
+    else this.queue.push(event)
     this.trim()
     this.schedule(FLUSH_DELAY_MS)
     this.carrySoon()
@@ -181,7 +200,9 @@ export class Outbox {
    * notice for what that load dropped ahead of its own events.
    */
   private adopt(carry: Carry): void {
-    const events = [...carry.events]
+    // Each was fitted by the load that queued it. One that another version of
+    // the mod carried is fitted here, and left out if it cannot be.
+    const events = carry.events.flatMap(event => this.fit(event) ?? [])
     if (carry.dropped > 0 && carry.noticeSeq !== null) {
       const at = indexOfBoot(events, carry.boot)
       events.splice(at, 0, {
@@ -200,13 +221,21 @@ export class Outbox {
 
   /**
    * What a load that replaced this one would need. An earlier load's events
-   * are kept whole and this load's own fill the rest of CARRY_LIMIT; each one
-   * past it counts as dropped, and a notice in flight that is cut counts as
-   * the events it reports.
+   * are kept whole and this load's own fill the rest of CARRY_LIMIT and
+   * MAX_CARRY_CHARS; each one past either counts as dropped, and a notice in
+   * flight that is cut counts as the events it reports.
    */
   private carry(): OutboxCarry {
     const pending = [...this.sending, ...this.queue]
-    const events = pending.slice(0, Math.max(indexOfBoot(pending, this.boot), CARRY_LIMIT))
+    const earlier = indexOfBoot(pending, this.boot)
+    let kept = 0
+    let chars = 0
+    for (const event of pending) {
+      chars += this.lengthOf(event) + 1
+      if (kept >= earlier && (kept >= CARRY_LIMIT || chars > MAX_CARRY_CHARS)) break
+      kept += 1
+    }
+    const events = pending.slice(0, kept)
     let dropped = this.dropped - this.sendingNotice
     for (const event of pending.slice(events.length)) dropped += event.type === 'outbox.dropped' ? this.sendingNotice : 1
     // A notice in flight keeps its seq for its own count; what is left needs a new one.
@@ -222,6 +251,44 @@ export class Outbox {
       this.carryPending = false
       if (this.state === 'on') this.ports?.carryOutbox(this.carry())
     })
+  }
+
+  /** The length of `event`'s JSON, `tag` aside. */
+  private lengthOf(event: Envelope): number {
+    let length = this.lengths.get(event)
+    if (length === undefined) {
+      length = JSON.stringify(event).length
+      this.lengths.set(event, length)
+    }
+    return length
+  }
+
+  /** `event` cut to summary detail when its JSON is longer than MAX_EVENT_CHARS, or undefined when that is not enough. */
+  private fit(event: Envelope): Envelope | undefined {
+    if (this.lengthOf(event) <= MAX_EVENT_CHARS) return event
+    const data = toWire(event.data, 'summary')
+    if (!isRecord(data)) return undefined
+    // `toWire` gives an object back as an object of JSON values.
+    const cut: Envelope = { ...event, data: data as EventData }
+    return this.lengthOf(cut) <= MAX_EVENT_CHARS ? cut : undefined
+  }
+
+  /**
+   * Takes the next batch off the queue: up to `count` events whose JSON, each
+   * with the tag it is stamped with, fits MAX_BATCH_CHARS. The first always
+   * goes, since every queued event fits on its own.
+   */
+  private takeBatch(count: number, config: Config): Envelope[] {
+    const tagChars = config.tag === undefined ? 0 : ',"tag":'.length + JSON.stringify(config.tag).length
+    let chars = BATCH_OVERHEAD_CHARS
+    let taken = 0
+    for (const event of this.queue) {
+      const length = this.lengthOf(event) + tagChars + 1
+      if (taken === count || (taken > 0 && chars + length > MAX_BATCH_CHARS)) break
+      chars += length
+      taken += 1
+    }
+    return this.queue.splice(0, taken)
   }
 
   private trim(): void {
@@ -268,7 +335,7 @@ export class Outbox {
     // The count is taken now; drops while the POST is out stay counted for the next notice.
     const droppedNow = this.dropped
     // A drop notice takes one of the batch's places, so no POST holds more than BATCH_SIZE.
-    const events = this.queue.splice(0, droppedNow > 0 ? BATCH_SIZE - 1 : BATCH_SIZE)
+    const events = this.takeBatch(droppedNow > 0 ? BATCH_SIZE - 1 : BATCH_SIZE, config)
     const batch = [...events]
     if (droppedNow > 0) {
       if (this.noticeSeq === undefined) {

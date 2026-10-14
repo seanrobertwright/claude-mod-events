@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { BACKOFF_MAX_MS, BACKOFF_START_MS, BATCH_SIZE, CARRY_LIMIT, FLUSH_DELAY_MS, Outbox, QUEUE_CAP, parseOutboxCarry } from '../hooks/outbox'
-import { CONFIG, fakePorts, reply } from './fakes'
+import { BACKOFF_MAX_MS, BACKOFF_START_MS, BATCH_SIZE, CARRY_LIMIT, FLUSH_DELAY_MS, MAX_EVENT_CHARS, Outbox, QUEUE_CAP, parseOutboxCarry } from '../hooks/outbox'
+import { CONFIG, ENGINE_TEXT_LIMIT, fakePorts, reply } from './fakes'
 
 describe('Outbox', () => {
   test('holds events until started, then sends them as one batch', async () => {
@@ -286,5 +286,60 @@ describe('Outbox across a hot reload', () => {
     ]) {
       expect(parseOutboxCarry(bad)).toBe(undefined)
     }
+  })
+})
+
+describe('Outbox under the engine\'s length limits', () => {
+  const FULL = { ...CONFIG, toolDetail: 'full' } as const
+  /** A tool result as `full` detail sends it: long enough that BATCH_SIZE of them is over the request limit. */
+  const bigText = (i: number) => `${i}:${'x'.repeat(30_000)}`
+
+  test('keeps every POST under the request limit, so a burst of long events all arrive', async () => {
+    const host = fakePorts(() => reply(200))
+    const outbox = new Outbox()
+    outbox.start(host.ports, FULL)
+    for (let i = 0; i < BATCH_SIZE; i++) outbox.emit('tool.finished', { text: bigText(i) })
+    await host.advance(10_000)
+    expect(host.posted().length).toBe(BATCH_SIZE)
+    expect(host.requests.every(request => (request.init?.body?.length ?? 0) <= ENGINE_TEXT_LIMIT)).toBe(true)
+  })
+
+  test('cuts an event too long to send on its own, and sends what follows it', async () => {
+    const host = fakePorts(() => reply(200))
+    const outbox = new Outbox()
+    outbox.start(host.ports, FULL)
+    outbox.emit('tool.finished', { text: 'y'.repeat(ENGINE_TEXT_LIMIT + 1) })
+    outbox.emit('turn.completed', { turnId: 't1' })
+    await host.advance(10_000)
+    const events = host.posted()
+    expect(events.map(event => event.type)).toEqual(['tool.finished', 'turn.completed'])
+    expect(String(events[0]?.data.text)).toContain('[truncated')
+  })
+
+  test('drops and counts an event still too long once cut, and sends what follows it', async () => {
+    const host = fakePorts(() => reply(200))
+    const outbox = new Outbox()
+    outbox.start(host.ports, FULL)
+    // Summary detail cuts strings and arrays, not the keys of an object.
+    const wide = Object.fromEntries(Array.from({ length: MAX_EVENT_CHARS / 10 }, (_, i) => [`k${i}`, 'value']))
+    outbox.emit('tool.started', { input: wide })
+    outbox.emit('turn.completed', { turnId: 't1' })
+    await host.advance(10_000)
+    expect(host.posted().map(event => [event.seq, event.type, event.data])).toEqual([
+      [3, 'outbox.dropped', { count: 1 }],
+      [2, 'turn.completed', { turnId: 't1' }],
+    ])
+  })
+
+  test('keeps its carry under the $.state limit, counting what it leaves out', async () => {
+    const host = fakePorts(() => reply(503))
+    const outbox = new Outbox()
+    outbox.start(host.ports, FULL)
+    for (let i = 0; i < BATCH_SIZE; i++) outbox.emit('tool.finished', { text: bigText(i) })
+    await host.settle()
+    expect(host.refusedCarries()).toBe(0)
+    const carry = host.outboxCarries.at(-1)
+    expect(carry?.events.length).toBeLessThan(BATCH_SIZE)
+    expect((carry?.events.length ?? 0) + (carry?.dropped ?? 0)).toBe(BATCH_SIZE)
   })
 })

@@ -35,8 +35,8 @@ changes between releases. This version was built and tested against Claude Code
    `GET /v1/commands` when you have something to send, and, if you turned host
    permissions on, decide `POST /v1/permission`.
 
-`CLAUDE_EVENTS_TOOLS=full` sends tool inputs and results whole instead of
-cutting long strings to 2 KB. `CLAUDE_EVENTS_PERMISSIONS=host` turns host
+`CLAUDE_EVENTS_TOOLS=full` sends tool inputs and results whole, up to 1 MiB
+per event, instead of cutting long strings to 2 KB. `CLAUDE_EVENTS_PERMISSIONS=host` turns host
 permissions on. The same settings exist as plugin options for a fixed host.
 [PROTOCOL.md](PROTOCOL.md) has every event, command and status code.
 
