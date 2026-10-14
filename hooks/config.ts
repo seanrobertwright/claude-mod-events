@@ -80,14 +80,15 @@ export function toEnvCarry(env: RawEnv): EnvCarry {
 /**
  * Variables read back from `$.state`, or undefined when they are not that
  * shape. `parseConfig` checks the values themselves, as it does the
- * environment's.
+ * environment's. A variable the carry lacks counts as unset: a reload into a
+ * newer copy of the mod can find a carry written before that variable existed.
  */
 export function parseEnvCarry(raw: unknown): RawEnv | undefined {
   if (!isRecord(raw)) return undefined
   const env: { [K in (typeof ENV_FIELDS)[number]]?: string } = {}
   for (const name of ENV_FIELDS) {
     const value = field(raw, name)
-    if (value !== null && typeof value !== 'string') return undefined
+    if (value !== undefined && value !== null && typeof value !== 'string') return undefined
     if (typeof value === 'string') env[name] = value
   }
   return { url: env.url, token: env.token, tag: env.tag, tools: env.tools, permissions: env.permissions, commands: env.commands }

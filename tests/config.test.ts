@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { type RawEnv, parseConfig, parseUrl } from '../hooks/config'
+import { type RawEnv, parseConfig, parseEnvCarry, parseUrl } from '../hooks/config'
 
 const NO_ENV: RawEnv = {
   url: undefined,
@@ -130,5 +130,17 @@ describe('parseConfig', () => {
   test('lets CLAUDE_EVENTS_COMMANDS=off override the option', () => {
     const result = parseConfig(env({ url: 'http://127.0.0.1:1', token: 't', commands: 'off' }), { hostCommands: true })
     expect(result.kind === 'on' && result.config.hostCommands).toBe(false)
+  })
+})
+
+describe('parseEnvCarry', () => {
+  test('takes a carry written before CLAUDE_EVENTS_COMMANDS existed, with commands unset', () => {
+    const older = { url: 'http://127.0.0.1:1', token: 't', tag: null, tools: null, permissions: 'host' }
+    expect(parseEnvCarry(older)).toEqual(env({ url: 'http://127.0.0.1:1', token: 't', permissions: 'host' }))
+  })
+
+  test('refuses a carry with a value that is not a string', () => {
+    expect(parseEnvCarry({ url: 'http://127.0.0.1:1', token: 7 })).toBeUndefined()
+    expect(parseEnvCarry('http://127.0.0.1:1')).toBeUndefined()
   })
 })
