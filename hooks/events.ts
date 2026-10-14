@@ -1,6 +1,12 @@
 import type { JsonValue } from 'claude-code'
 import type { ToolDetail } from './config'
 
+/**
+ * The mod's own version, as `.claude-plugin/plugin.json` states it: held here
+ * so the mod reads no file to learn it. `scripts/check.sh` fails when they differ.
+ */
+export const MOD_VERSION = '0.1.0'
+
 export const EVENT_TYPES = [
   'session.started',
   'session.ended',
