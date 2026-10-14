@@ -98,7 +98,8 @@ export class Outbox {
   private dropped = 0
   /** The seq the next drop notice goes out under, kept across retries so a retry opens no gap. */
   private noticeSeq: number | undefined
-  private seq = 0
+  /** The last seq taken. Seq 1 is kept for the boot's `boot.started`, which `start` puts first. */
+  private seq = 1
   private state: 'pending' | 'on' | 'off' = 'pending'
   private ports: Ports | undefined
   private config: Config | undefined
@@ -140,12 +141,18 @@ export class Outbox {
     this.carrySoon()
   }
 
-  /** Turns the outbox on. `carry` is what an earlier load of the module left unsent. */
-  start(ports: Ports, config: Config, carry?: Carry): void {
+  /**
+   * Turns the outbox on. `bootStarted` is the data of this boot's
+   * `boot.started`, which goes under seq 1 ahead of every event queued so far;
+   * `carry` is what an earlier load of the module left unsent, which goes
+   * ahead of both.
+   */
+  start(ports: Ports, config: Config, carry?: Carry, bootStarted?: EventData): void {
     if (this.state !== 'pending') return
     this.ports = ports
     this.config = config
     this.state = 'on'
+    if (bootStarted !== undefined) this.queue.unshift(this.envelope('boot.started', bootStarted, this.sessionId, 1))
     if (carry !== undefined && carry.boot !== this.boot) this.adopt(carry)
     this.carrySoon()
     if (this.queue.length > 0) this.schedule(0)

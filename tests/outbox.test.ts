@@ -2,6 +2,9 @@ import { describe, expect, test } from 'claude-code/testing'
 import { BACKOFF_MAX_MS, BACKOFF_START_MS, BATCH_SIZE, CARRY_LIMIT, FLUSH_DELAY_MS, MAX_EVENT_CHARS, Outbox, QUEUE_CAP, parseOutboxCarry } from '../hooks/outbox'
 import { CONFIG, ENGINE_TEXT_LIMIT, fakePorts, reply } from './fakes'
 
+// An outbox keeps seq 1 for its boot's `boot.started`. These tests start it
+// without one, so the events they emit begin at seq 2.
+
 describe('Outbox', () => {
   test('holds events until started, then sends them as one batch', async () => {
     const host = fakePorts(() => reply(200))
@@ -21,8 +24,8 @@ describe('Outbox', () => {
     expect(request?.init?.headers).toEqual({ 'content-type': 'application/json', authorization: 'Bearer secret' })
     const events = host.posted()
     expect(events.map(event => [event.seq, event.type, event.sessionId])).toEqual([
-      [1, 'turn.started', 's1'],
-      [2, 'turn.completed', 's1'],
+      [2, 'turn.started', 's1'],
+      [3, 'turn.completed', 's1'],
     ])
   })
 
@@ -202,9 +205,9 @@ describe('Outbox across a hot reload', () => {
     const carry = host.outboxCarries.at(-1)
     expect(carry?.boot).toBe(outbox.bootId)
     expect(carry?.events.map(event => [event.seq, event.type])).toEqual([
-      [1, 'turn.started'],
-      [2, 'turn.completed'],
-      [3, 'attention.notification'],
+      [2, 'turn.started'],
+      [3, 'turn.completed'],
+      [4, 'attention.notification'],
     ])
     expect([carry?.dropped, carry?.noticeSeq]).toEqual([0, null])
 
@@ -223,8 +226,8 @@ describe('Outbox across a hot reload', () => {
     await host.settle()
     const carry = host.outboxCarries.at(-1)
     expect(carry?.events.length).toBe(CARRY_LIMIT)
-    expect(carry?.events.at(-1)?.seq).toBe(CARRY_LIMIT)
-    expect([carry?.dropped, carry?.noticeSeq]).toEqual([3, CARRY_LIMIT + 3 + 1])
+    expect(carry?.events.at(-1)?.seq).toBe(1 + CARRY_LIMIT)
+    expect([carry?.dropped, carry?.noticeSeq]).toEqual([3, 1 + CARRY_LIMIT + 3 + 1])
   })
 
   test('sends an adopted carry first, under its own boot, and never trims it', async () => {
@@ -252,7 +255,7 @@ describe('Outbox across a hot reload', () => {
       ['old', 7, 'outbox.dropped'],
       ['old', 5, 'turn.started'],
       ['old', 6, 'turn.completed'],
-      ['own', QUEUE_CAP + 1, 'outbox.dropped'],
+      ['own', 1 + QUEUE_CAP + 1, 'outbox.dropped'],
     ])
     expect([events[0]?.data, events[3]?.data]).toEqual([{ count: 2 }, { count: 3 }])
     expect(events.every(event => event.tag === CONFIG.tag)).toBe(true)
@@ -326,8 +329,8 @@ describe('Outbox under the engine\'s length limits', () => {
     outbox.emit('turn.completed', { turnId: 't1' })
     await host.advance(10_000)
     expect(host.posted().map(event => [event.seq, event.type, event.data])).toEqual([
-      [3, 'outbox.dropped', { count: 1 }],
-      [2, 'turn.completed', { turnId: 't1' }],
+      [4, 'outbox.dropped', { count: 1 }],
+      [3, 'turn.completed', { turnId: 't1' }],
     ])
   })
 

@@ -3,6 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { Envelope } from '../hooks/events'
 import { CARRY_LIMIT } from '../hooks/outbox'
 import { register } from '../hooks/register'
+import { CLAUDE_CODE } from './fakes'
 
 type Hook = (...args: unknown[]) => unknown
 type StateRef = { readonly plugin: string; readonly key: string; readonly id?: string }
@@ -50,7 +51,7 @@ function reloadingSession(variables: Record<string, string>) {
             else env.set(name, value)
           }),
       },
-      session: { id: () => answer(() => 's-1') },
+      session: { id: () => answer(() => 's-1'), version: () => answer(() => CLAUDE_CODE) },
       clock: {
         now: () => answer(() => now),
         after: (ms: number, fn: () => void) => {
@@ -172,12 +173,15 @@ describe('event-bridge across a hot reload', () => {
     await w.fire('turn.complete', { turnId: 'turn-1', reason: 'answer', answer: 'done', durationMs: 5, isAborted: false })
     await w.advance(10_000)
 
+    // The new boot opens with its own boot.started, behind what the boot before left.
     expect(byBoot(w.delivered)).toEqual([
-      ['A', 1, 'session.started'],
-      ['A', 2, 'turn.started'],
-      ['A', 3, 'tool.started'],
-      ['A', 4, 'tool.finished'],
-      ['B', 1, 'turn.completed'],
+      ['A', 1, 'boot.started'],
+      ['A', 2, 'session.started'],
+      ['A', 3, 'turn.started'],
+      ['A', 4, 'tool.started'],
+      ['A', 5, 'tool.finished'],
+      ['B', 1, 'boot.started'],
+      ['B', 2, 'turn.completed'],
     ])
   })
 
@@ -195,9 +199,11 @@ describe('event-bridge across a hot reload', () => {
     await w.advance(1000)
 
     expect(byBoot(w.delivered)).toEqual([
-      ['A', 1, 'session.started'],
-      ['A', 2, 'turn.started'],
-      ['A', 3, 'turn.completed'],
+      ['A', 1, 'boot.started'],
+      ['A', 2, 'session.started'],
+      ['A', 3, 'turn.started'],
+      ['A', 4, 'turn.completed'],
+      ['B', 1, 'boot.started'],
     ])
   })
 
@@ -215,14 +221,18 @@ describe('event-bridge across a hot reload', () => {
     await w.advance(10_000)
 
     const sent = byBoot(w.delivered)
-    const lastUsed = 1 + CARRY_LIMIT + over
+    const lastUsed = 2 + CARRY_LIMIT + over
     // As within a boot, the notice goes ahead of the boot's events, under the seq after the last one it used.
-    expect(sent.slice(0, 2)).toEqual([
-      ['A', 1, 'session.started'],
+    expect(sent.slice(0, 3)).toEqual([
+      ['A', 1, 'boot.started'],
+      ['A', 2, 'session.started'],
       ['A', lastUsed + 1, 'outbox.dropped'],
     ])
-    expect(w.delivered[1]?.data).toEqual({ count: over })
-    expect(sent.slice(2)).toEqual(Array.from({ length: CARRY_LIMIT }, (_, i) => ['A', i + 2, 'turn.started']))
+    expect(w.delivered[2]?.data).toEqual({ count: over })
+    expect(sent.slice(3)).toEqual([
+      ...Array.from({ length: CARRY_LIMIT }, (_, i): [string, number, string] => ['A', i + 3, 'turn.started']),
+      ['B', 1, 'boot.started'],
+    ])
   })
 
   test('lets an interrupt abort a turn that started before the reload', async () => {
@@ -269,11 +279,13 @@ describe('event-bridge with its variables cleared', () => {
     await w.fire('turn.start', { text: 'go', turnId: 'turn-1' })
     await w.advance(1000)
     expect(byBoot(w.delivered)).toEqual([
-      ['A', 1, 'session.started'],
-      ['B', 1, 'turn.started'],
+      ['A', 1, 'boot.started'],
+      ['A', 2, 'session.started'],
+      ['B', 1, 'boot.started'],
+      ['B', 2, 'turn.started'],
     ])
     // The inbox runs only with a token, so a poll from B means B has it.
-    expect(w.polls.some(poll => poll.searchParams.get('boot') === w.delivered[1]?.boot)).toBe(true)
+    expect(w.polls.some(poll => poll.searchParams.get('boot') === w.delivered.at(-1)?.boot)).toBe(true)
   })
 
   test('still reaches the host after a /clear that empties $.state, then a reload', async () => {
@@ -289,7 +301,7 @@ describe('event-bridge with its variables cleared', () => {
     await w.fire('turn.start', { text: 'go', turnId: 'turn-1' })
     await w.advance(1000)
     expect(w.env()).toEqual({})
-    expect(byBoot(w.delivered).at(-1)).toEqual(['B', 1, 'turn.started'])
+    expect(byBoot(w.delivered).at(-1)).toEqual(['B', 2, 'turn.started'])
     expect(w.polls.at(-1)?.searchParams.get('tag')).toBe('pane-7')
   })
 })

@@ -1,4 +1,4 @@
-import type { HttpInit, HttpResponse, PromptSubmitArgs } from 'claude-code'
+import type { HttpInit, HttpResponse, PromptSubmitArgs, SessionVersion } from 'claude-code'
 import type { Config } from '../hooks/config'
 import type { Envelope } from '../hooks/events'
 import type { Ports } from '../hooks/ports'
@@ -10,6 +10,13 @@ export const CONFIG: Config = {
   tag: 'pane-7',
   toolDetail: 'summary',
   hostPermissions: false,
+}
+
+/** What the engine answers `$.session.version()` with in a test session: a development build's. */
+export const CLAUDE_CODE: SessionVersion = {
+  version: '2.1.300-dev.20261001.t090000.sha1a2b3c4',
+  base: '2.1.300-dev',
+  builtAt: '2026-10-01T09:00:00Z',
 }
 
 export type Request = { readonly url: string; readonly init: HttpInit | undefined }

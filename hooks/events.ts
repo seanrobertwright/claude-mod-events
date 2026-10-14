@@ -8,6 +8,7 @@ import type { ToolDetail } from './config'
 export const MOD_VERSION = '0.1.0'
 
 export const EVENT_TYPES = [
+  'boot.started',
   'session.started',
   'session.ended',
   'turn.started',
@@ -132,6 +133,14 @@ function compact(fields: { readonly [key: string]: JsonValue | undefined }): Eve
     if (value !== undefined) out[key] = value
   }
   return out
+}
+
+/** `claudeCode` is what `$.session.version()` answered, or undefined when it failed. */
+export function bootStartedData(claudeCode: { readonly version: string; readonly base?: string; readonly builtAt?: string } | undefined): EventData {
+  return compact({
+    version: MOD_VERSION,
+    claudeCode: claudeCode === undefined ? undefined : compact({ version: claudeCode.version, base: claudeCode.base, builtAt: claudeCode.builtAt }),
+  })
 }
 
 export type SessionStartedFields = {

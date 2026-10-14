@@ -1,7 +1,8 @@
-import type { HttpResponse, On } from 'claude-code'
+import type { HttpResponse, On, SessionVersion } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
-import type { Envelope } from '../hooks/events'
+import { type Envelope, MOD_VERSION } from '../hooks/events'
 import { MIN_POLL_INTERVAL_MS } from '../hooks/inbox'
+import { CLAUDE_CODE } from './fakes'
 
 type Sent = { url: string; body: string | undefined; headers: Record<string, string> | undefined }
 
@@ -40,7 +41,9 @@ function world(on: On, env: Record<string, string>, commands: unknown[] = []) {
     if (e.url.endsWith('/v1/permission')) return { value: ok(decision) }
     return { value: ok() }
   })
-  on('session.id', () => ({ value: 'from-engine' }))
+  on('session.id', () => ({ value: 's-1' }))
+  let version: () => SessionVersion | Promise<SessionVersion> = () => CLAUDE_CODE
+  on('session.version', async () => ({ value: await version() }))
   on('ui.log', ($, e) => {
     logs.push(e.text)
     return { value: undefined }
@@ -79,6 +82,10 @@ function world(on: On, env: Record<string, string>, commands: unknown[] = []) {
     events,
     setDecision: (body: string) => {
       decision = body
+    },
+    /** Changes how the engine answers `$.session.version()`: later, or with an error. */
+    answerVersion: (next: () => SessionVersion | Promise<SessionVersion>) => {
+      version = next
     },
     /** Hands `more` to the next command poll, as a host does with a command it queues later. */
     queue: (...more: unknown[]) => {
@@ -120,6 +127,7 @@ describe('event-bridge in a session', () => {
 
     const events = w.events()
     expect(events.map(event => event.type)).toEqual([
+      'boot.started',
       'session.started',
       'turn.started',
       'tool.started',
@@ -128,11 +136,11 @@ describe('event-bridge in a session', () => {
       'attention.notification',
     ])
     expect(events.every(event => event.sessionId === 's-1' && event.tag === 'pane-7')).toBe(true)
-    expect(events.map(event => event.seq)).toEqual([1, 2, 3, 4, 5, 6])
-    expect(events[0]?.data).toEqual({ source: 'startup', cwd: '/work', transcriptPath: '/t.jsonl' })
-    expect(events[2]?.data).toEqual({ tool: 'Bash', toolUseId: expect.any(String), input: { command: 'ls' } })
-    expect(events[3]?.data).toEqual(expect.objectContaining({ tool: 'Bash', status: 'ok', text: 'file-a\nfile-b' }))
-    expect(events[5]?.data).toEqual({ notificationType: 'idle_prompt', message: 'Claude is waiting for your input' })
+    expect(events.map(event => event.seq)).toEqual([1, 2, 3, 4, 5, 6, 7])
+    expect(events[1]?.data).toEqual({ source: 'startup', cwd: '/work', transcriptPath: '/t.jsonl' })
+    expect(events[3]?.data).toEqual({ tool: 'Bash', toolUseId: expect.any(String), input: { command: 'ls' } })
+    expect(events[4]?.data).toEqual(expect.objectContaining({ tool: 'Bash', status: 'ok', text: 'file-a\nfile-b' }))
+    expect(events[6]?.data).toEqual({ notificationType: 'idle_prompt', message: 'Claude is waiting for your input' })
 
     const post = w.sent.find(request => request.url.endsWith('/v1/events'))
     expect(post?.headers).toEqual({ 'content-type': 'application/json', authorization: 'Bearer secret' })
@@ -144,7 +152,10 @@ describe('event-bridge in a session', () => {
     await $.classic.SessionStart({ source: 'startup', session_id: 's-1' })
     await $.session.start({ cwd: '/work', surface: null, isInteractive: false })
     await w.clock.advance(200)
-    expect(w.events().map(event => [event.type, event.tag])).toEqual([['session.started', 'pane-7']])
+    expect(w.events().map(event => [event.type, event.tag])).toEqual([
+      ['boot.started', 'pane-7'],
+      ['session.started', 'pane-7'],
+    ])
   })
 
   test('flushes on session end without waiting for the timer', async ($, on) => {
@@ -152,8 +163,8 @@ describe('event-bridge in a session', () => {
     await $.session.start({ cwd: '/work', surface: null, isInteractive: false })
     await $.classic.SessionStart({ source: 'startup', session_id: 's-1' })
     await $.session.end({ reason: 'prompt_input_exit', sessionId: 's-1', resume: { id: 's-1' } })
-    expect(w.events().map(event => event.type)).toEqual(['session.started', 'session.ended'])
-    expect(w.events()[1]?.data).toEqual({ reason: 'prompt_input_exit', resumeId: 's-1' })
+    expect(w.events().map(event => event.type)).toEqual(['boot.started', 'session.started', 'session.ended'])
+    expect(w.events()[2]?.data).toEqual({ reason: 'prompt_input_exit', resumeId: 's-1' })
   })
 
   test('runs a prompt and an interrupt the host sends', async ($, on) => {
@@ -253,6 +264,64 @@ describe('event-bridge in a session', () => {
   })
 })
 
+describe('event-bridge as a boot starts', () => {
+  test("first reports its own version and Claude Code's, as the boot's seq 1", async ($, on) => {
+    const w = world(on, HOST)
+    await $.session.start({ cwd: '/work', surface: null, isInteractive: true })
+    await $.classic.SessionStart({ source: 'startup', session_id: 's-1' })
+    await w.clock.advance(200)
+
+    const events = w.events()
+    expect(events.map(event => [event.seq, event.type])).toEqual([
+      [1, 'boot.started'],
+      [2, 'session.started'],
+    ])
+    expect(events[0]?.data).toEqual({ version: MOD_VERSION, claudeCode: CLAUDE_CODE })
+  })
+
+  test('still opens the boot when Claude Code cannot say its version, and sends what follows in order', async ($, on) => {
+    const w = world(on, HOST)
+    w.answerVersion(() => {
+      throw new Error('no version')
+    })
+    await $.session.start({ cwd: '/work', surface: null, isInteractive: true })
+    await $.classic.SessionStart({ source: 'startup', session_id: 's-1' })
+    await $.turn.start({ text: 'go', turnId: 'turn-1' })
+    await w.clock.advance(200)
+
+    const events = w.events()
+    expect(events.map(event => [event.seq, event.type])).toEqual([
+      [1, 'boot.started'],
+      [2, 'session.started'],
+      [3, 'turn.started'],
+    ])
+    expect(events[0]?.data).toEqual({ version: MOD_VERSION })
+  })
+
+  test('holds what is raised while Claude Code has yet to say its version behind boot.started', async ($, on) => {
+    const w = world(on, HOST)
+    let answer: (version: SessionVersion) => void = () => undefined
+    const later = new Promise<SessionVersion>(resolve => {
+      answer = resolve
+    })
+    w.answerVersion(() => later)
+    const starting = $.session.start({ cwd: '/work', surface: null, isInteractive: true })
+    await $.classic.SessionStart({ source: 'startup', session_id: 's-1' })
+    await $.turn.start({ text: 'go', turnId: 'turn-1' })
+    await w.clock.advance(200)
+    expect(w.events()).toEqual([])
+
+    answer(CLAUDE_CODE)
+    await starting
+    await w.clock.advance(200)
+    expect(w.events().map(event => [event.seq, event.type])).toEqual([
+      [1, 'boot.started'],
+      [2, 'session.started'],
+      [3, 'turn.started'],
+    ])
+  })
+})
+
 describe('event-bridge and the environment Claude passes on', () => {
   test('clears its variables once read, so the commands Claude runs never see them', async ($, on) => {
     const w = world(on, { ...HOST, CLAUDE_EVENTS_TOOLS: 'full', CLAUDE_EVENTS_PERMISSIONS: 'host', HOME: '/home/me' })
@@ -261,7 +330,7 @@ describe('event-bridge and the environment Claude passes on', () => {
 
     await $.classic.SessionStart({ source: 'startup', session_id: 's-1' })
     await w.clock.advance(200)
-    expect(w.events().map(event => event.type)).toEqual(['session.started'])
+    expect(w.events().map(event => event.type)).toEqual(['boot.started', 'session.started'])
     expect(w.sent.find(request => request.url.endsWith('/v1/events'))?.headers?.authorization).toBe('Bearer secret')
   })
 
