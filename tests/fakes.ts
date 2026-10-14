@@ -10,6 +10,7 @@ export const CONFIG: Config = {
   tag: 'pane-7',
   toolDetail: 'summary',
   hostPermissions: false,
+  hostCommands: true,
 }
 
 export type Request = { readonly url: string; readonly init: HttpInit | undefined }

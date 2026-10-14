@@ -88,6 +88,7 @@ function world(on: On, env: Record<string, string>, commands: unknown[] = []) {
 }
 
 const HOST = { CLAUDE_EVENTS_URL: 'http://127.0.0.1:47800', CLAUDE_EVENTS_TOKEN: 'secret', CLAUDE_EVENTS_TAG: 'pane-7' }
+const HOST_WITH_COMMANDS = { ...HOST, CLAUDE_EVENTS_COMMANDS: 'host' }
 
 describe('event-bridge in a session', () => {
   test('stays idle with no host configured', async ($, on) => {
@@ -157,7 +158,7 @@ describe('event-bridge in a session', () => {
   })
 
   test('runs a prompt and an interrupt the host sends', async ($, on) => {
-    const w = world(on, HOST, [
+    const w = world(on, HOST_WITH_COMMANDS, [
       { id: 'c1', type: 'interrupt' },
       { id: 'c2', type: 'prompt', text: 'now run the tests' },
     ])
@@ -181,7 +182,7 @@ describe('event-bridge in a session', () => {
   // A /clear or a resume goes on in the same process under a new session id.
   for (const reason of ['clear', 'resume'] as const) {
     test(`keeps taking commands after a ${reason}, under the new session id`, async ($, on) => {
-      const w = world(on, HOST)
+      const w = world(on, HOST_WITH_COMMANDS)
       await $.session.start({ cwd: '/work', surface: null, isInteractive: true })
       await $.classic.SessionStart({ source: 'startup', session_id: 's-1' })
       await w.clock.advance(0)
@@ -198,29 +199,73 @@ describe('event-bridge in a session', () => {
 
   for (const reason of ['prompt_input_exit', 'other'] as const) {
     test(`stops polling for commands when the session ends with ${reason}`, async ($, on) => {
-      const w = world(on, HOST)
+      const w = world(on, HOST_WITH_COMMANDS)
       await $.session.start({ cwd: '/work', surface: null, isInteractive: true })
       await $.classic.SessionStart({ source: 'startup', session_id: 's-1' })
       await w.clock.advance(0)
       await $.session.end({ reason, sessionId: 's-1', resume: { id: 's-1' } })
       const polls = () => w.sent.filter(request => request.url.includes('/v1/commands')).length
       const before = polls()
+      expect(before).toBe(1)
       await w.clock.advance(10_000)
       expect(polls()).toBe(before)
     })
   }
 
-  test('takes no commands without a token', async ($, on) => {
-    const w = world(on, { CLAUDE_EVENTS_URL: 'http://127.0.0.1:47800' }, [{ id: 'c1', type: 'prompt', text: 'hi' }])
+  // The token only authenticates: a host that only observes holds no polls.
+  test('takes no commands with a token alone', async ($, on) => {
+    const w = world(on, HOST, [{ id: 'c1', type: 'prompt', text: 'hi' }])
     await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    await $.classic.SessionStart({ source: 'startup', session_id: 's-1' })
     await w.clock.advance(5000)
     expect(w.sent.some(request => request.url.includes('/v1/commands'))).toBe(false)
     expect(w.prompts).toEqual([])
+    expect(w.events().map(event => event.type)).toEqual(['session.started'])
+    expect(w.logs).toEqual([])
+  })
+
+  test('says once that commands are off without a token', async ($, on) => {
+    const w = world(on, { CLAUDE_EVENTS_URL: 'http://127.0.0.1:47800', CLAUDE_EVENTS_COMMANDS: 'host' }, [
+      { id: 'c1', type: 'prompt', text: 'hi' },
+    ])
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    await $.classic.SessionStart({ source: 'startup', session_id: 's-1' })
+    await w.clock.advance(5000)
+    expect(w.sent.some(request => request.url.includes('/v1/commands'))).toBe(false)
+    expect(w.prompts).toEqual([])
+    expect(w.events().map(event => event.type)).toEqual(['session.started'])
+    expect(w.logs).toEqual(['event-bridge: host commands are off: they need a token'])
+  })
+
+  test('says once why a CLAUDE_EVENTS_COMMANDS it cannot use leaves it idle', async ($, on) => {
+    const w = world(on, { ...HOST, CLAUDE_EVENTS_COMMANDS: 'yes' })
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    await $.classic.SessionStart({ source: 'startup', session_id: 's-1' })
+    await w.clock.advance(10_000)
+    expect(w.sent.length).toBe(0)
+    expect(w.logs).toEqual(['event-bridge: idle, CLAUDE_EVENTS_COMMANDS must be host or off, not "yes"'])
+  })
+
+  test('polls for commands when the option turns them on', { options: { hostCommands: true } }, async ($, on) => {
+    const w = world(on, HOST, [{ id: 'c1', type: 'toast', text: 'hello' }])
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    await $.classic.SessionStart({ source: 'startup', session_id: 's-1' })
+    await w.clock.advance(200)
+    expect(w.events().filter(event => event.type === 'command.result').map(event => event.data)).toEqual([{ id: 'c1', ok: true }])
+  })
+
+  test('lets CLAUDE_EVENTS_COMMANDS=off override the option', { options: { hostCommands: true } }, async ($, on) => {
+    const w = world(on, { ...HOST, CLAUDE_EVENTS_COMMANDS: 'off' }, [{ id: 'c1', type: 'toast', text: 'hello' }])
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
+    await $.classic.SessionStart({ source: 'startup', session_id: 's-1' })
+    await w.clock.advance(5000)
+    expect(w.sent.some(request => request.url.includes('/v1/commands'))).toBe(false)
+    expect(w.logs).toEqual([])
   })
 
   // A headless run does not exit until a command poll it holds comes back.
   test('takes no commands in a headless run, and still sends its events and the end flush', async ($, on) => {
-    const w = world(on, HOST, [{ id: 'c1', type: 'prompt', text: 'hi' }])
+    const w = world(on, HOST_WITH_COMMANDS, [{ id: 'c1', type: 'prompt', text: 'hi' }])
     await $.classic.SessionStart({ source: 'startup', session_id: 's-1' })
     await $.session.start({ cwd: '/work', surface: null, isInteractive: false })
     await $.turn.start({ text: 'Reply with just: ok', turnId: 'turn-1' })
@@ -237,7 +282,7 @@ describe('event-bridge in a session', () => {
   // Either start hook can be the one that reads the config.
   for (const order of ['session.start first', 'SessionStart first'] as const) {
     test(`polls for commands in an interactive session, ${order}`, async ($, on) => {
-      const w = world(on, HOST, [{ id: 'c1', type: 'toast', text: 'hello' }])
+      const w = world(on, HOST_WITH_COMMANDS, [{ id: 'c1', type: 'toast', text: 'hello' }])
       const sessionStart = () => $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true })
       const classicStart = () => $.classic.SessionStart({ source: 'startup', session_id: 's-1' })
       if (order === 'session.start first') {
@@ -289,7 +334,12 @@ describe('event-bridge in a session', () => {
 
 describe('event-bridge and the environment Claude passes on', () => {
   test('clears its variables once read, so the commands Claude runs never see them', async ($, on) => {
-    const w = world(on, { ...HOST, CLAUDE_EVENTS_TOOLS: 'full', CLAUDE_EVENTS_PERMISSIONS: 'host', HOME: '/home/me' })
+    const w = world(on, {
+      ...HOST_WITH_COMMANDS,
+      CLAUDE_EVENTS_TOOLS: 'full',
+      CLAUDE_EVENTS_PERMISSIONS: 'host',
+      HOME: '/home/me',
+    })
     await $.session.start({ cwd: '/work', surface: null, isInteractive: true })
     expect(w.env()).toEqual({ HOME: '/home/me' })
 

@@ -4,8 +4,8 @@ This is the contract between the `event-bridge` Claude Code mod and a host
 program: your own app that starts `claude`, or a terminal multiplexer that
 runs Claude Code sessions in its panes.
 
-The host runs an HTTP listener. The mod pushes events to it, pulls commands
-from it, and, when allowed, asks it to decide tool permissions. Every
+The host runs an HTTP listener. The mod pushes events to it and, when
+allowed, pulls commands from it and asks it to decide tool permissions. Every
 request comes from the Claude Code process, never from a browser.
 
 ## Discovery
@@ -17,14 +17,17 @@ the plugin's settings.
 | Variable | Option | Meaning |
 | --- | --- | --- |
 | `CLAUDE_EVENTS_URL` | `url` | Base URL of the listener. Plain `http` only to `127.0.0.1`, `localhost` or `[::1]`; any other host needs `https`. No credentials, query or fragment. Unset or empty: the mod stays idle. |
-| `CLAUDE_EVENTS_TOKEN` | `token` | Shared secret, sent as `Authorization: Bearer <token>` on every request. Visible ASCII, at most 4096 characters. Without it the mod still sends events but takes no commands and asks no permissions. |
+| `CLAUDE_EVENTS_TOKEN` | `token` | Shared secret, sent as `Authorization: Bearer <token>` on every request. Visible ASCII, at most 4096 characters. It only authenticates: commands and host permissions each have their own switch, and both need the token. Without it the mod still sends events, with no `Authorization` header. |
 | `CLAUDE_EVENTS_TAG` | (none) | The host's own label for this session, such as a pane id. Echoed on every event and on each command poll. At most 256 characters, no control characters. |
 | `CLAUDE_EVENTS_TOOLS` | `toolDetail` | `summary` (the default) cuts strings in tool inputs, results, prompts and answers to 2048 characters and arrays to 100 items, and says how much was cut. `full` sends them whole, up to 1 MiB of JSON per event (see Events). |
 | `CLAUDE_EVENTS_PERMISSIONS` | `hostPermissions` | `host` lets the host decide tool calls that would otherwise ask the person; `off` overrides an option that turned it on. Needs the token. |
+| `CLAUDE_EVENTS_COMMANDS` | `hostCommands` | `host` turns on the command poll, so the host can send an interactive session commands (see Commands); `off` overrides an option that turned it on. Needs the token. Unset, the mod never polls. |
 
 A value the mod cannot use (a remote `http` URL, a token with spaces, an
-unknown `CLAUDE_EVENTS_TOOLS`) leaves the mod idle, and it writes one line
-saying why in the session's transcript.
+unknown `CLAUDE_EVENTS_TOOLS`, a `CLAUDE_EVENTS_COMMANDS` other than `host` or
+`off`) leaves the mod idle, and it writes one line saying why in the session's
+transcript. `host` for commands or permissions with no token turns that one
+off, and the mod writes one line saying so.
 
 The mod reads these as the session starts and then clears them from Claude
 Code's environment. The processes Claude Code starts after that don't inherit
@@ -121,11 +124,13 @@ slow to answer may miss that last batch.
 ## Commands: `GET {url}/v1/commands`
 
 The mod long-polls this endpoint while an interactive session runs, and only
-when a token is set. A headless session, a `claude -p` run or one the SDK
-drives, never polls and takes no commands: Claude Code holds such a run open
-until the request the mod has out comes back, so a held poll would delay its
-exit by up to the rest of the hold. It still sends its events, and its
-permission asks when host permissions are on.
+when `CLAUDE_EVENTS_COMMANDS` (or the `hostCommands` option) is `host` and a
+token is set. A host that only observes leaves it unset and never sees a poll.
+A headless session, a `claude -p` run or one the SDK drives, never polls and
+takes no commands, whatever `CLAUDE_EVENTS_COMMANDS` says: Claude Code holds
+such a run open until the request the mod has out comes back, so a held poll
+would delay its exit by up to the rest of the hold. It still sends its events,
+and its permission asks when host permissions are on.
 
 Polling goes on across `/clear` and a resume, under the new session id, and
 across a hot reload, under the new boot. It stops when the session ends for any
@@ -200,6 +205,7 @@ organization's ceiling for that tool: where the organization caps a tool at
 A host that can send `prompt` commands controls the session, including one
 started with `--dangerously-skip-permissions`. So:
 
+- Set `CLAUDE_EVENTS_COMMANDS=host` only when the host sends commands.
 - Bind the listener to `127.0.0.1` (or `::1`) only.
 - Generate a fresh random token for each session or pane, pass it in
   `CLAUDE_EVENTS_TOKEN`, and refuse any request whose `Authorization` header

@@ -1,7 +1,7 @@
 {
   "name": "event-bridge",
   "version": "0.1.0",
-  "description": "Sends session, turn, attention and tool events to a host program over HTTP, and takes prompts and interrupts back.",
+  "description": "Sends session, turn, attention and tool events to a host program over HTTP and, when allowed, takes prompts and interrupts back.",
   "types": "./types/index.d.ts",
   "userConfig": {
     "url": {
@@ -13,7 +13,7 @@
     "token": {
       "type": "string",
       "title": "Host token",
-      "description": "Shared secret sent as a bearer token. CLAUDE_EVENTS_TOKEN overrides it. Commands from the host are accepted only when it is set.",
+      "description": "Shared secret sent as a bearer token on every request. CLAUDE_EVENTS_TOKEN overrides it. Host commands and host permissions need it, each turned on by its own option.",
       "sensitive": true
     },
     "toolDetail": {
@@ -26,7 +26,13 @@
     "hostPermissions": {
       "type": "boolean",
       "title": "Host answers permission asks",
-      "description": "Lets the host allow or deny a tool call that would otherwise ask. Needs the token. CLAUDE_EVENTS_PERMISSIONS=host overrides it.",
+      "description": "Lets the host allow or deny a tool call that would otherwise ask. Needs the token. CLAUDE_EVENTS_PERMISSIONS, host or off, overrides it.",
+      "default": false
+    },
+    "hostCommands": {
+      "type": "boolean",
+      "title": "Host sends commands",
+      "description": "Lets the host submit prompts, interrupt the running turn and show toasts in an interactive session. Needs the token. CLAUDE_EVENTS_COMMANDS, host or off, overrides it.",
       "default": false
     }
   }

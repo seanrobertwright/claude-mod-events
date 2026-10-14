@@ -82,6 +82,7 @@ async function takeEnv($: EngineInterface): Promise<RawEnv> {
     tag: await $.env.get('CLAUDE_EVENTS_TAG'),
     tools: await $.env.get('CLAUDE_EVENTS_TOOLS'),
     permissions: await $.env.get('CLAUDE_EVENTS_PERMISSIONS'),
+    commands: await $.env.get('CLAUDE_EVENTS_COMMANDS'),
   }
   const clearing = await Promise.allSettled([
     env.url === undefined ? undefined : $.env.set('CLAUDE_EVENTS_URL', undefined),
@@ -89,6 +90,7 @@ async function takeEnv($: EngineInterface): Promise<RawEnv> {
     env.tag === undefined ? undefined : $.env.set('CLAUDE_EVENTS_TAG', undefined),
     env.tools === undefined ? undefined : $.env.set('CLAUDE_EVENTS_TOOLS', undefined),
     env.permissions === undefined ? undefined : $.env.set('CLAUDE_EVENTS_PERMISSIONS', undefined),
+    env.commands === undefined ? undefined : $.env.set('CLAUDE_EVENTS_COMMANDS', undefined),
   ])
   if (clearing.some(outcome => outcome.status === 'rejected')) {
     portsFor($).log('could not clear the CLAUDE_EVENTS_ variables; commands Claude runs can read them', 'transcript')

@@ -10,7 +10,12 @@ type StateRef = { readonly plugin: string; readonly key: string; readonly id?: s
 /** How the host's listener answers `/v1/events`: takes them, refuses the connection, or never answers. */
 type EventsMode = 'up' | 'down' | 'hold'
 
-const HOST = { CLAUDE_EVENTS_URL: 'http://127.0.0.1:47800', CLAUDE_EVENTS_TOKEN: 'secret', CLAUDE_EVENTS_TAG: 'pane-7' }
+const HOST = {
+  CLAUDE_EVENTS_URL: 'http://127.0.0.1:47800',
+  CLAUDE_EVENTS_TOKEN: 'secret',
+  CLAUDE_EVENTS_TAG: 'pane-7',
+  CLAUDE_EVENTS_COMMANDS: 'host',
+}
 
 function reply(status: number, text = ''): HttpResponse {
   return { status, ok: status >= 200 && status < 300, headers: {}, text }
@@ -288,7 +293,7 @@ describe('event-bridge with its variables cleared', () => {
       ['A', 1, 'session.started'],
       ['B', 1, 'turn.started'],
     ])
-    // The inbox runs only with a token, so a poll from B means B has it.
+    // The inbox runs only with a token and CLAUDE_EVENTS_COMMANDS=host, so a poll from B means B has both.
     expect(w.polls.some(poll => poll.searchParams.get('boot') === w.delivered[1]?.boot)).toBe(true)
   })
 
