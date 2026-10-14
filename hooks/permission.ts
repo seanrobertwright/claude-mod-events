@@ -1,7 +1,7 @@
 import type { Config } from './config'
 import { toWire } from './events'
 import { authHeaders } from './outbox'
-import type { Ports } from './ports'
+import { type Ports, fetchWithin } from './ports'
 
 /** How long the host has to decide before the person's own dialog shows. */
 export const PERMISSION_TIMEOUT_MS = 30_000
@@ -47,32 +47,17 @@ export function askHost(
   ask: PermissionAsk,
   timeoutMs: number = PERMISSION_TIMEOUT_MS,
 ): Promise<HostDecision | undefined> {
-  return new Promise(resolve => {
-    let settled = false
-    const settle = (value: HostDecision | undefined) => {
-      if (settled) return
-      settled = true
-      timer.cancel()
-      resolve(value)
-    }
-    const timer = ports.after(timeoutMs, () => settle(undefined))
-    ports
-      .fetch(`${config.url}/v1/permission`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', ...authHeaders(config) },
-        body: JSON.stringify({
-          requestId: ask.requestId,
-          sessionId: ask.sessionId ?? null,
-          tag: config.tag ?? null,
-          tool: ask.tool,
-          input: toWire(ask.input, config.toolDetail),
-          agentId: ask.agentId ?? null,
-          reason: ask.reason ?? null,
-        }),
-      })
-      .then(
-        response => settle(response.ok ? parseDecision(response.text) : undefined),
-        () => settle(undefined),
-      )
-  })
+  return fetchWithin(ports, timeoutMs, `${config.url}/v1/permission`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...authHeaders(config) },
+    body: JSON.stringify({
+      requestId: ask.requestId,
+      sessionId: ask.sessionId ?? null,
+      tag: config.tag ?? null,
+      tool: ask.tool,
+      input: toWire(ask.input, config.toolDetail),
+      agentId: ask.agentId ?? null,
+      reason: ask.reason ?? null,
+    }),
+  }).then(response => (response?.ok === true ? parseDecision(response.text) : undefined))
 }

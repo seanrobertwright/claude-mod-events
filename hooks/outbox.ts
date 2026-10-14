@@ -2,7 +2,7 @@ import type { Timer } from 'claude-code'
 import type { OutboxCarry } from '../types'
 import type { Config } from './config'
 import { type Envelope, type EventData, type EventType, field, isRecord, newBootId, nowMs, parseEnvelope, toWire } from './events'
-import type { Ports } from './ports'
+import { type Ports, fetchWithin } from './ports'
 
 /** Events held while the host is unreachable; past it the oldest of this boot's go, its `boot.started` aside. */
 export const QUEUE_CAP = 1000
@@ -32,6 +32,12 @@ export const MAX_CARRY_CHARS = 3 * 1024 * 1024
 export const FLUSH_DELAY_MS = 100
 export const BACKOFF_START_MS = 250
 export const BACKOFF_MAX_MS = 5000
+/**
+ * How long the host has to answer a POST. Past it the batch counts as unsent
+ * and goes again; the request given up on can still land, and the host drops
+ * what it already has by boot and seq.
+ */
+export const POST_TIMEOUT_MS = 10_000
 
 export function authHeaders(config: Config): Record<string, string> {
   return config.token === undefined ? {} : { authorization: `Bearer ${config.token}` }
@@ -386,17 +392,12 @@ export class Outbox {
       if (droppedNow > 0) this.noticeSeq = undefined
     }
 
-    let status: number | undefined
-    try {
-      const response = await ports.fetch(`${config.url}/v1/events`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', ...authHeaders(config) },
-        body: JSON.stringify({ events: batch.map(event => ({ ...event, tag: config.tag })) }),
-      })
-      status = response.status
-    } catch {
-      status = undefined
-    }
+    const response = await fetchWithin(ports, POST_TIMEOUT_MS, `${config.url}/v1/events`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...authHeaders(config) },
+      body: JSON.stringify({ events: batch.map(event => ({ ...event, tag: config.tag })) }),
+    })
+    const status = response?.status
     // Settled: below, in the same turn of the loop, the batch is counted done or put back.
     this.sending = []
     this.sendingNotice = 0

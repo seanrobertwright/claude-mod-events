@@ -8,6 +8,15 @@ The host runs an HTTP listener. The mod pushes events to it, pulls commands
 from it, and, when allowed, asks it to decide tool permissions. Every
 request comes from the Claude Code process, never from a browser.
 
+Answer every request yourself; don't redirect. Claude Code follows a
+redirect, and the mod sees only the answer at the end of it. A `302` turns a
+`POST` into a `GET` without its body, as a `301` and a `303` do under the
+fetch standard, so a batch of events redirected that way is lost, and the mod
+counts it delivered if the end of the redirect answers `2xx`. A `307` keeps
+the `POST` and its body. Claude Code keeps the `Authorization` header on a
+redirect to the same host and port and drops it on one that leaves them
+(measured on Claude Code 2.1.299).
+
 ## Discovery
 
 The host sets these variables in the environment of the `claude` process it
@@ -46,8 +55,12 @@ Clearing keeps the values out of what a process is handed, not out of reach:
 ## Events: `POST {url}/v1/events`
 
 Body: `{ "events": [Envelope, ...] }`, at most 200 per request and 3 MiB
-(3,145,728 characters) of JSON. Answer with any `2xx`. Events from one
-process arrive in order, one request at a time.
+(3,145,728 characters) of JSON. Answer with any `2xx`, within 10 seconds.
+The mod sends one request at a time, in order. When a request has had no
+answer for 10 seconds, the mod gives up on it and sends the batch again, so
+an event can arrive twice. A request it gave up on can still reach you after
+a later one, and every event in it is then one you already have. Drop an
+event whose `boot` and `seq` you already have.
 
 An event whose JSON is longer than 1 MiB (1,048,576 characters), as one can
 be with `full` detail, is sent with its `data` cut the way `summary` cuts it.
@@ -85,7 +98,7 @@ How the mod treats your answer:
 | --- | --- |
 | `2xx` | The batch is done. |
 | A `4xx` other than `408` and `429` | The batch is dropped. The mod writes one line to the transcript the first time. |
-| Anything else: no answer, `408`, `429`, `5xx` | The batch is kept and retried, waiting 250 ms and doubling up to 5 s. The mod holds at most 1000 events; past that it drops the oldest, never a `boot.started`, and reports the count in an `outbox.dropped` event. |
+| Anything else: no answer within 10 s, `408`, `429`, `5xx` | The batch is kept and retried, waiting 250 ms and doubling up to 5 s. The mod holds at most 1000 events; past that it drops the oldest, never a `boot.started`, and reports the count in an `outbox.dropped` event. |
 
 ### After a hot reload
 
