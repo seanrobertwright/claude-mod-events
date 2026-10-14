@@ -124,6 +124,22 @@ describe('Outbox', () => {
     expect(outbox.droppedCount).toBe(0)
   })
 
+  test('keeps its boot.started first past the cap, and reports the drop behind it', async () => {
+    const host = fakePorts(() => reply(200))
+    const outbox = new Outbox()
+    outbox.start(host.ports, CONFIG, undefined, { version: '1.2.3' })
+    for (let i = 0; i < QUEUE_CAP; i++) outbox.emit('tool.started', { i })
+    expect(outbox.droppedCount).toBe(1)
+
+    await host.advance(BACKOFF_MAX_MS)
+    // The oldest after boot.started went: seq 2. The notice takes the seq after the last one used.
+    expect(host.posted().slice(0, 3).map(event => [event.seq, event.type])).toEqual([
+      [1, 'boot.started'],
+      [1 + QUEUE_CAP + 1, 'outbox.dropped'],
+      [3, 'tool.started'],
+    ])
+  })
+
   test('drops a batch the host refuses with a 4xx and says so once', async () => {
     const host = fakePorts(() => reply(401))
     const outbox = new Outbox()
@@ -228,6 +244,18 @@ describe('Outbox across a hot reload', () => {
     expect(carry?.events.length).toBe(CARRY_LIMIT)
     expect(carry?.events.at(-1)?.seq).toBe(1 + CARRY_LIMIT)
     expect([carry?.dropped, carry?.noticeSeq]).toEqual([3, 1 + CARRY_LIMIT + 3 + 1])
+  })
+
+  test('carries its boot.started even when the load before left a full carry', async () => {
+    const host = fakePorts(() => reply(503))
+    const outbox = new Outbox()
+    const old = Array.from({ length: CARRY_LIMIT }, (_, i) => ({ v: 1, boot: 'old-boot', seq: i + 1, ts: 1, sessionId: 's1', tag: undefined, type: 'turn.started', data: {} }) as const)
+    outbox.start(host.ports, CONFIG, { boot: 'old-boot', events: old, dropped: 0, noticeSeq: null }, { version: '1.2.3' })
+    outbox.emit('turn.completed', {})
+    await host.settle()
+    const carry = host.outboxCarries.at(-1)
+    expect(carry?.events.slice(CARRY_LIMIT).map(event => [event.seq, event.type])).toEqual([[1, 'boot.started']])
+    expect([carry?.dropped, carry?.noticeSeq]).toEqual([1, 3])
   })
 
   test('sends an adopted carry first, under its own boot, and never trims it', async () => {

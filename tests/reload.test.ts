@@ -235,6 +235,28 @@ describe('event-bridge across a hot reload', () => {
     ])
   })
 
+  test('sends the boot.started of the load before ahead of its drop notice when neither had gone', async () => {
+    const w = reloadingSession(HOST)
+    w.setEvents('down')
+    await w.start()
+    const over = 5
+    for (let i = 0; i < CARRY_LIMIT + over; i++) await w.fire('turn.start', { text: 'go', turnId: `turn-${i}` })
+    await w.advance(1000)
+
+    await w.reload()
+    w.setEvents('up')
+    await w.advance(10_000)
+
+    const lastUsed = 2 + CARRY_LIMIT + over
+    expect(byBoot(w.delivered).slice(0, 3)).toEqual([
+      ['A', 1, 'boot.started'],
+      ['A', lastUsed + 1, 'outbox.dropped'],
+      ['A', 2, 'session.started'],
+    ])
+    // boot.started and session.started took two of the carry's places.
+    expect(w.delivered[1]?.data).toEqual({ count: over + 2 })
+  })
+
   test('lets an interrupt abort a turn that started before the reload', async () => {
     const w = reloadingSession(HOST)
     await w.start()
