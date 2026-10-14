@@ -4,7 +4,7 @@ import type { Config } from './config'
 import { type Envelope, type EventData, type EventType, field, isRecord, newBootId, nowMs, parseEnvelope, toWire } from './events'
 import type { Ports } from './ports'
 
-/** Events held while the host is unreachable; past it the oldest go. */
+/** Events held while the host is unreachable; past it the oldest of this boot's go, its `boot.started` aside. */
 export const QUEUE_CAP = 1000
 /** Events per POST. */
 export const BATCH_SIZE = 200
@@ -22,7 +22,8 @@ const BATCH_OVERHEAD_CHARS = 1024
 /**
  * How many events a carry holds. A load's own events fill what an earlier
  * load's leave of it and of MAX_CARRY_CHARS, and those past either count as
- * dropped; an earlier load's events are kept even past them.
+ * dropped; an earlier load's events, and the load's `boot.started`, are kept
+ * even past them.
  */
 export const CARRY_LIMIT = BATCH_SIZE
 /** Characters of JSON a carry's events may take, likewise. */
@@ -38,10 +39,29 @@ export function authHeaders(config: Config): Record<string, string> {
 
 type SendOutcome = 'sent' | 'retry' | 'rejected'
 
+/** The seq of a boot's `boot.started`, kept for it from the moment its outbox is made. */
+const BOOT_STARTED_SEQ = 1
+
+/** Whether `event` is `boot`'s `boot.started`. */
+function isBootStarted(event: Envelope | undefined, boot: string): boolean {
+  return event?.boot === boot && event.type === 'boot.started'
+}
+
 /** Where `boot`'s first event sits in `events`, or the end when it has none there. */
 function indexOfBoot(events: readonly Envelope[], boot: string): number {
   const at = events.findIndex(event => event.boot === boot)
   return at < 0 ? events.length : at
+}
+
+/**
+ * Where `boot`'s events after its `boot.started` begin in `events`: its first
+ * event, or the one behind that when it is the `boot.started`. A drop notice
+ * goes here, and a trim or a carry's limits start here, so nothing else of a
+ * boot goes ahead of its `boot.started`.
+ */
+function indexAfterBootStarted(events: readonly Envelope[], boot: string): number {
+  const at = indexOfBoot(events, boot)
+  return isBootStarted(events[at], boot) ? at + 1 : at
 }
 
 function isCount(value: unknown): value is number {
@@ -76,8 +96,10 @@ export function parseOutboxCarry(raw: unknown): Carry | undefined {
  * Holds events and POSTs them to the host in batches.
  *
  * It starts `pending` and queues what it is given, since events can arrive
- * before the config is read. `start` turns it on and sends what is queued;
- * `disable` drops the queue and ignores every later emit.
+ * before the config is read. `start` turns it on and sends what is queued,
+ * behind the boot's `boot.started`; `disable` drops the queue and ignores
+ * every later emit. Nothing drops a `boot.started` to make room, and a drop
+ * notice goes behind it, so no other event of its boot arrives ahead of it.
  *
  * A hot reload starts a fresh copy, so once on it keeps what the host has not
  * acknowledged in `$.state`, through `ports.carryOutbox`: the events up to
@@ -98,7 +120,8 @@ export class Outbox {
   private dropped = 0
   /** The seq the next drop notice goes out under, kept across retries so a retry opens no gap. */
   private noticeSeq: number | undefined
-  private seq = 0
+  /** The last seq taken. BOOT_STARTED_SEQ is taken from the start, so the boot's other events count on behind its `boot.started`. */
+  private seq = BOOT_STARTED_SEQ
   private state: 'pending' | 'on' | 'off' = 'pending'
   private ports: Ports | undefined
   private config: Config | undefined
@@ -140,12 +163,18 @@ export class Outbox {
     this.carrySoon()
   }
 
-  /** Turns the outbox on. `carry` is what an earlier load of the module left unsent. */
-  start(ports: Ports, config: Config, carry?: Carry): void {
+  /**
+   * Turns the outbox on. `bootStarted` is the data of this boot's
+   * `boot.started`, which goes under seq 1 ahead of every event queued so far;
+   * seq 1 is kept for it whether or not it is given. `carry` is what an
+   * earlier load of the module left unsent, which goes ahead of both.
+   */
+  start(ports: Ports, config: Config, carry?: Carry, bootStarted?: EventData): void {
     if (this.state !== 'pending') return
     this.ports = ports
     this.config = config
     this.state = 'on'
+    if (bootStarted !== undefined) this.queue.unshift(this.envelope('boot.started', bootStarted, this.sessionId, BOOT_STARTED_SEQ))
     if (carry !== undefined && carry.boot !== this.boot) this.adopt(carry)
     this.carrySoon()
     if (this.queue.length > 0) this.schedule(0)
@@ -204,7 +233,7 @@ export class Outbox {
     // the mod carried is fitted here, and left out if it cannot be.
     const events = carry.events.flatMap(event => this.fit(event) ?? [])
     if (carry.dropped > 0 && carry.noticeSeq !== null) {
-      const at = indexOfBoot(events, carry.boot)
+      const at = indexAfterBootStarted(events, carry.boot)
       events.splice(at, 0, {
         v: 1,
         boot: carry.boot,
@@ -221,18 +250,19 @@ export class Outbox {
 
   /**
    * What a load that replaced this one would need. An earlier load's events
-   * are kept whole and this load's own fill the rest of CARRY_LIMIT and
-   * MAX_CARRY_CHARS; each one past either counts as dropped, and a notice in
-   * flight that is cut counts as the events it reports.
+   * and this load's `boot.started` are kept whole, and this load's other
+   * events fill the rest of CARRY_LIMIT and MAX_CARRY_CHARS; each one past
+   * either counts as dropped, and a notice in flight that is cut counts as
+   * the events it reports.
    */
   private carry(): OutboxCarry {
     const pending = [...this.sending, ...this.queue]
-    const earlier = indexOfBoot(pending, this.boot)
+    const keptWhole = indexAfterBootStarted(pending, this.boot)
     let kept = 0
     let chars = 0
     for (const event of pending) {
       chars += this.lengthOf(event) + 1
-      if (kept >= earlier && (kept >= CARRY_LIMIT || chars > MAX_CARRY_CHARS)) break
+      if (kept >= keptWhole &&(kept >= CARRY_LIMIT || chars > MAX_CARRY_CHARS)) break
       kept += 1
     }
     const events = pending.slice(0, kept)
@@ -294,8 +324,8 @@ export class Outbox {
   private trim(): void {
     const over = this.queue.length - QUEUE_CAP
     if (over <= 0) return
-    // An earlier load's events stay, so each boot's drops are reported under that boot.
-    this.dropped += this.queue.splice(indexOfBoot(this.queue, this.boot), over).length
+    // An earlier load's events stay, so each boot's drops are reported under that boot, and so does this boot's boot.started.
+    this.dropped += this.queue.splice(indexAfterBootStarted(this.queue, this.boot), over).length
   }
 
   private schedule(delayMs: number): void {
@@ -332,18 +362,19 @@ export class Outbox {
     const ports = this.ports
     const config = this.config
     if (ports === undefined || config === undefined) return 'retry'
-    // The count is taken now; drops while the POST is out stay counted for the next notice.
-    const droppedNow = this.dropped
     // A drop notice takes one of the batch's places, so no POST holds more than BATCH_SIZE.
-    const events = this.takeBatch(droppedNow > 0 ? BATCH_SIZE - 1 : BATCH_SIZE, config)
+    const events = this.takeBatch(this.dropped > 0 ? BATCH_SIZE - 1 : BATCH_SIZE, config)
+    // The count is taken now; drops while the POST is out stay counted for the next notice.
+    // While this boot's boot.started is still queued behind the batch, the notice waits for it.
+    const droppedNow = this.queue.some(event => isBootStarted(event, this.boot)) ? 0 : this.dropped
     const batch = [...events]
     if (droppedNow > 0) {
       if (this.noticeSeq === undefined) {
         this.seq += 1
         this.noticeSeq = this.seq
       }
-      // Ahead of this boot's own events, behind any an earlier load left.
-      const at = indexOfBoot(events, this.boot)
+      // Ahead of this boot's own events but its boot.started, behind any an earlier load left.
+      const at = indexAfterBootStarted(events, this.boot)
       batch.splice(at, 0, this.envelope('outbox.dropped', { count: droppedNow }, events[at]?.sessionId ?? this.sessionId, this.noticeSeq))
     }
     if (batch.length === 0) return 'sent'

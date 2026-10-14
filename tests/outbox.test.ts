@@ -2,6 +2,9 @@ import { describe, expect, test } from 'claude-code/testing'
 import { BACKOFF_MAX_MS, BACKOFF_START_MS, BATCH_SIZE, CARRY_LIMIT, FLUSH_DELAY_MS, MAX_EVENT_CHARS, Outbox, QUEUE_CAP, parseOutboxCarry } from '../hooks/outbox'
 import { CONFIG, ENGINE_TEXT_LIMIT, fakePorts, reply } from './fakes'
 
+// An outbox keeps seq 1 for its boot's `boot.started`. A test that starts it
+// without one sees the events it emits begin at seq 2.
+
 describe('Outbox', () => {
   test('holds events until started, then sends them as one batch', async () => {
     const host = fakePorts(() => reply(200))
@@ -21,8 +24,8 @@ describe('Outbox', () => {
     expect(request?.init?.headers).toEqual({ 'content-type': 'application/json', authorization: 'Bearer secret' })
     const events = host.posted()
     expect(events.map(event => [event.seq, event.type, event.sessionId])).toEqual([
-      [1, 'turn.started', 's1'],
-      [2, 'turn.completed', 's1'],
+      [2, 'turn.started', 's1'],
+      [3, 'turn.completed', 's1'],
     ])
   })
 
@@ -121,6 +124,22 @@ describe('Outbox', () => {
     expect(outbox.droppedCount).toBe(0)
   })
 
+  test('keeps its boot.started first past the cap, and reports the drop behind it', async () => {
+    const host = fakePorts(() => reply(200))
+    const outbox = new Outbox()
+    outbox.start(host.ports, CONFIG, undefined, { version: '1.2.3' })
+    for (let i = 0; i < QUEUE_CAP; i++) outbox.emit('tool.started', { i })
+    expect(outbox.droppedCount).toBe(1)
+
+    await host.advance(BACKOFF_MAX_MS)
+    // The oldest after boot.started went: seq 2. The notice takes the seq after the last one used.
+    expect(host.posted().slice(0, 3).map(event => [event.seq, event.type])).toEqual([
+      [1, 'boot.started'],
+      [1 + QUEUE_CAP + 1, 'outbox.dropped'],
+      [3, 'tool.started'],
+    ])
+  })
+
   test('drops a batch the host refuses with a 4xx and says so once', async () => {
     const host = fakePorts(() => reply(401))
     const outbox = new Outbox()
@@ -183,6 +202,10 @@ describe('Outbox', () => {
 })
 
 describe('Outbox across a hot reload', () => {
+  /** An event an earlier load left unsent. */
+  const old = (seq: number, type: 'turn.started' | 'turn.completed') =>
+    ({ v: 1, boot: 'old-boot', seq, ts: 1, sessionId: 's1', tag: undefined, type, data: {} }) as const
+
   test('carries everything the host has not acknowledged, a POST in flight included', async () => {
     let release: (() => void) | undefined
     const host = fakePorts(
@@ -202,9 +225,9 @@ describe('Outbox across a hot reload', () => {
     const carry = host.outboxCarries.at(-1)
     expect(carry?.boot).toBe(outbox.bootId)
     expect(carry?.events.map(event => [event.seq, event.type])).toEqual([
-      [1, 'turn.started'],
-      [2, 'turn.completed'],
-      [3, 'attention.notification'],
+      [2, 'turn.started'],
+      [3, 'turn.completed'],
+      [4, 'attention.notification'],
     ])
     expect([carry?.dropped, carry?.noticeSeq]).toEqual([0, null])
 
@@ -223,8 +246,34 @@ describe('Outbox across a hot reload', () => {
     await host.settle()
     const carry = host.outboxCarries.at(-1)
     expect(carry?.events.length).toBe(CARRY_LIMIT)
-    expect(carry?.events.at(-1)?.seq).toBe(CARRY_LIMIT)
-    expect([carry?.dropped, carry?.noticeSeq]).toEqual([3, CARRY_LIMIT + 3 + 1])
+    expect(carry?.events.at(-1)?.seq).toBe(1 + CARRY_LIMIT)
+    expect([carry?.dropped, carry?.noticeSeq]).toEqual([3, 1 + CARRY_LIMIT + 3 + 1])
+  })
+
+  test('carries its boot.started even when the load before left a full carry', async () => {
+    const host = fakePorts(() => reply(503))
+    const outbox = new Outbox()
+    const events = Array.from({ length: CARRY_LIMIT }, (_, i) => old(i + 1, 'turn.started'))
+    outbox.start(host.ports, CONFIG, { boot: 'old-boot', events, dropped: 0, noticeSeq: null }, { version: '1.2.3' })
+    outbox.emit('turn.completed', {})
+    await host.settle()
+    const carry = host.outboxCarries.at(-1)
+    expect(carry?.events.slice(CARRY_LIMIT).map(event => [event.seq, event.type])).toEqual([[1, 'boot.started']])
+    expect([carry?.dropped, carry?.noticeSeq]).toEqual([1, 3])
+  })
+
+  test('holds its drop notice back until its boot.started goes, though a carry fills the first batch', async () => {
+    const host = fakePorts(() => reply(200))
+    const outbox = new Outbox()
+    const events = Array.from({ length: BATCH_SIZE }, (_, i) => old(i + 1, 'turn.started'))
+    outbox.start(host.ports, CONFIG, { boot: 'old-boot', events, dropped: 0, noticeSeq: null }, { version: '1.2.3' })
+    // The carried events and boot.started take places too, so one of these goes.
+    for (let i = 0; i < QUEUE_CAP - BATCH_SIZE; i++) outbox.emit('tool.started', { i })
+    expect(outbox.droppedCount).toBe(1)
+
+    await host.advance(BACKOFF_MAX_MS)
+    const own = host.posted().filter(event => event.boot === outbox.bootId)
+    expect(own.slice(0, 2).map(event => event.type)).toEqual(['boot.started', 'outbox.dropped'])
   })
 
   test('sends an adopted carry first, under its own boot, and never trims it', async () => {
@@ -232,8 +281,6 @@ describe('Outbox across a hot reload', () => {
     const host = fakePorts(() => (up ? reply(200) : reply(503)))
     const outbox = new Outbox()
     outbox.sessionId = 's1'
-    const old = (seq: number, type: 'turn.started' | 'turn.completed') =>
-      ({ v: 1, boot: 'old-boot', seq, ts: 1, sessionId: 's1', tag: undefined, type, data: {} }) as const
     outbox.start(host.ports, CONFIG, {
       boot: 'old-boot',
       events: [old(5, 'turn.started'), old(6, 'turn.completed')],
@@ -252,7 +299,7 @@ describe('Outbox across a hot reload', () => {
       ['old', 7, 'outbox.dropped'],
       ['old', 5, 'turn.started'],
       ['old', 6, 'turn.completed'],
-      ['own', QUEUE_CAP + 1, 'outbox.dropped'],
+      ['own', 1 + QUEUE_CAP + 1, 'outbox.dropped'],
     ])
     expect([events[0]?.data, events[3]?.data]).toEqual([{ count: 2 }, { count: 3 }])
     expect(events.every(event => event.tag === CONFIG.tag)).toBe(true)
@@ -326,8 +373,8 @@ describe('Outbox under the engine\'s length limits', () => {
     outbox.emit('turn.completed', { turnId: 't1' })
     await host.advance(10_000)
     expect(host.posted().map(event => [event.seq, event.type, event.data])).toEqual([
-      [3, 'outbox.dropped', { count: 1 }],
-      [2, 'turn.completed', { turnId: 't1' }],
+      [4, 'outbox.dropped', { count: 1 }],
+      [3, 'turn.completed', { turnId: 't1' }],
     ])
   })
 
