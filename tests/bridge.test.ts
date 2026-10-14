@@ -83,7 +83,7 @@ function world(on: On, env: Record<string, string>, commands: unknown[] = []) {
     setDecision: (body: string) => {
       decision = body
     },
-    /** Changes how the engine answers `$.session.version()`: later, or with an error. */
+    /** Changes how the engine answers `$.session.version()`: later, with an error, or in another shape. */
     answerVersion: (next: () => SessionVersion | Promise<SessionVersion>) => {
       version = next
     },

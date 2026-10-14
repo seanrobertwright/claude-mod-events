@@ -48,7 +48,8 @@ function indexOfBoot(events: readonly Envelope[], boot: string): number {
 /**
  * Where `boot`'s events after its `boot.started` begin in `events`: its first
  * event, or the one behind that when it is the `boot.started`. A drop notice
- * goes here and a trim starts here, so the host learns of a boot first.
+ * goes here, and a trim or a carry's limits start here, so nothing else of a
+ * boot goes ahead of its `boot.started`.
  */
 function indexAfterBootStarted(events: readonly Envelope[], boot: string): number {
   const at = indexOfBoot(events, boot)
@@ -111,7 +112,7 @@ export class Outbox {
   private dropped = 0
   /** The seq the next drop notice goes out under, kept across retries so a retry opens no gap. */
   private noticeSeq: number | undefined
-  /** The last seq taken. Seq 1 is kept for the boot's `boot.started`, which `start` puts first. */
+  /** The last seq taken. Seq 1 is kept for the boot's `boot.started`, which `start` puts ahead of the boot's other events. */
   private seq = 1
   private state: 'pending' | 'on' | 'off' = 'pending'
   private ports: Ports | undefined

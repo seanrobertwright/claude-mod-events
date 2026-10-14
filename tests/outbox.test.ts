@@ -2,8 +2,8 @@ import { describe, expect, test } from 'claude-code/testing'
 import { BACKOFF_MAX_MS, BACKOFF_START_MS, BATCH_SIZE, CARRY_LIMIT, FLUSH_DELAY_MS, MAX_EVENT_CHARS, Outbox, QUEUE_CAP, parseOutboxCarry } from '../hooks/outbox'
 import { CONFIG, ENGINE_TEXT_LIMIT, fakePorts, reply } from './fakes'
 
-// An outbox keeps seq 1 for its boot's `boot.started`. These tests start it
-// without one, so the events they emit begin at seq 2.
+// An outbox keeps seq 1 for its boot's `boot.started`. A test that starts it
+// without one sees the events it emits begin at seq 2.
 
 describe('Outbox', () => {
   test('holds events until started, then sends them as one batch', async () => {
