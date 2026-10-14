@@ -202,6 +202,10 @@ describe('Outbox', () => {
 })
 
 describe('Outbox across a hot reload', () => {
+  /** An event an earlier load left unsent. */
+  const old = (seq: number, type: 'turn.started' | 'turn.completed') =>
+    ({ v: 1, boot: 'old-boot', seq, ts: 1, sessionId: 's1', tag: undefined, type, data: {} }) as const
+
   test('carries everything the host has not acknowledged, a POST in flight included', async () => {
     let release: (() => void) | undefined
     const host = fakePorts(
@@ -249,8 +253,8 @@ describe('Outbox across a hot reload', () => {
   test('carries its boot.started even when the load before left a full carry', async () => {
     const host = fakePorts(() => reply(503))
     const outbox = new Outbox()
-    const old = Array.from({ length: CARRY_LIMIT }, (_, i) => ({ v: 1, boot: 'old-boot', seq: i + 1, ts: 1, sessionId: 's1', tag: undefined, type: 'turn.started', data: {} }) as const)
-    outbox.start(host.ports, CONFIG, { boot: 'old-boot', events: old, dropped: 0, noticeSeq: null }, { version: '1.2.3' })
+    const events = Array.from({ length: CARRY_LIMIT }, (_, i) => old(i + 1, 'turn.started'))
+    outbox.start(host.ports, CONFIG, { boot: 'old-boot', events, dropped: 0, noticeSeq: null }, { version: '1.2.3' })
     outbox.emit('turn.completed', {})
     await host.settle()
     const carry = host.outboxCarries.at(-1)
@@ -261,8 +265,8 @@ describe('Outbox across a hot reload', () => {
   test('holds its drop notice back until its boot.started goes, though a carry fills the first batch', async () => {
     const host = fakePorts(() => reply(200))
     const outbox = new Outbox()
-    const old = Array.from({ length: BATCH_SIZE }, (_, i) => ({ v: 1, boot: 'old-boot', seq: i + 1, ts: 1, sessionId: 's1', tag: undefined, type: 'turn.started', data: {} }) as const)
-    outbox.start(host.ports, CONFIG, { boot: 'old-boot', events: old, dropped: 0, noticeSeq: null }, { version: '1.2.3' })
+    const events = Array.from({ length: BATCH_SIZE }, (_, i) => old(i + 1, 'turn.started'))
+    outbox.start(host.ports, CONFIG, { boot: 'old-boot', events, dropped: 0, noticeSeq: null }, { version: '1.2.3' })
     // The carried events and boot.started take places too, so one of these goes.
     for (let i = 0; i < QUEUE_CAP - BATCH_SIZE; i++) outbox.emit('tool.started', { i })
     expect(outbox.droppedCount).toBe(1)
@@ -277,8 +281,6 @@ describe('Outbox across a hot reload', () => {
     const host = fakePorts(() => (up ? reply(200) : reply(503)))
     const outbox = new Outbox()
     outbox.sessionId = 's1'
-    const old = (seq: number, type: 'turn.started' | 'turn.completed') =>
-      ({ v: 1, boot: 'old-boot', seq, ts: 1, sessionId: 's1', tag: undefined, type, data: {} }) as const
     outbox.start(host.ports, CONFIG, {
       boot: 'old-boot',
       events: [old(5, 'turn.started'), old(6, 'turn.completed')],
