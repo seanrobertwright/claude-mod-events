@@ -3,7 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { Envelope } from '../hooks/events'
 import { CARRY_LIMIT } from '../hooks/outbox'
 import { register } from '../hooks/register'
-import { CLAUDE_CODE } from './fakes'
+import { CLAUDE_CODE_VERSION } from './fakes'
 
 type Hook = (...args: unknown[]) => unknown
 type StateRef = { readonly plugin: string; readonly key: string; readonly id?: string }
@@ -51,7 +51,7 @@ function reloadingSession(variables: Record<string, string>) {
             else env.set(name, value)
           }),
       },
-      session: { id: () => answer(() => 's-1'), version: () => answer(() => CLAUDE_CODE) },
+      session: { id: () => answer(() => 's-1'), version: () => answer(() => CLAUDE_CODE_VERSION) },
       clock: {
         now: () => answer(() => now),
         after: (ms: number, fn: () => void) => {

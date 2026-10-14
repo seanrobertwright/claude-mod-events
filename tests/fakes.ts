@@ -13,7 +13,7 @@ export const CONFIG: Config = {
 }
 
 /** What the engine answers `$.session.version()` with in a test session: a development build's. */
-export const CLAUDE_CODE: SessionVersion = {
+export const CLAUDE_CODE_VERSION: SessionVersion = {
   version: '2.1.300-dev.20261001.t090000.sha1a2b3c4',
   base: '2.1.300-dev',
   builtAt: '2026-10-01T09:00:00Z',

@@ -2,7 +2,7 @@ import type { HttpResponse, On, SessionVersion } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 import { type Envelope, MOD_VERSION } from '../hooks/events'
 import { MIN_POLL_INTERVAL_MS } from '../hooks/inbox'
-import { CLAUDE_CODE } from './fakes'
+import { CLAUDE_CODE_VERSION } from './fakes'
 
 type Sent = { url: string; body: string | undefined; headers: Record<string, string> | undefined }
 
@@ -42,7 +42,7 @@ function world(on: On, env: Record<string, string>, commands: unknown[] = []) {
     return { value: ok() }
   })
   on('session.id', () => ({ value: 's-1' }))
-  let version: () => SessionVersion | Promise<SessionVersion> = () => CLAUDE_CODE
+  let version: () => SessionVersion | Promise<SessionVersion> = () => CLAUDE_CODE_VERSION
   on('session.version', async () => ({ value: await version() }))
   on('ui.log', ($, e) => {
     logs.push(e.text)
@@ -276,7 +276,7 @@ describe('event-bridge as a boot starts', () => {
       [1, 'boot.started'],
       [2, 'session.started'],
     ])
-    expect(events[0]?.data).toEqual({ version: MOD_VERSION, claudeCode: CLAUDE_CODE })
+    expect(events[0]?.data).toEqual({ version: MOD_VERSION, claudeCode: CLAUDE_CODE_VERSION })
   })
 
   test('still opens the boot when Claude Code cannot say its version, and sends what follows in order', async ($, on) => {
@@ -320,7 +320,7 @@ describe('event-bridge as a boot starts', () => {
     await w.clock.advance(200)
     expect(w.events()).toEqual([])
 
-    answer(CLAUDE_CODE)
+    answer(CLAUDE_CODE_VERSION)
     await starting
     await w.clock.advance(200)
     expect(w.events().map(event => [event.seq, event.type])).toEqual([
