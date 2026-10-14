@@ -107,7 +107,7 @@ and what the previous boot had not had acknowledged goes on:
 
 | `type` | When | `data` |
 | --- | --- | --- |
-| `boot.started` | The mod loads: a process start or a hot reload. It is the boot's `seq` 1 | `version` (the mod's own, as its `plugin.json` states it), and `claudeCode` when Claude Code says its version: `version` (as `claude --version` prints it), and `base` (the release it is built from, such as `2.1.300` or `2.1.300-dev`) and `builtAt` (an ISO 8601 time) when known |
+| `boot.started` | The mod loads: a process start or a hot reload. It is the boot's `seq` 1 | `version` (the mod's own, as its `plugin.json` states it), and `claudeCode` when Claude Code says its version: `version` (what `claude --version` prints), and `base` (the release it is built from, such as `2.1.300` or `2.1.300-dev`) and `builtAt` (when it was built) when known, each as Claude Code states it |
 | `session.started` | A session starts, resumes, or begins again after `/clear` or compaction | `source` (`startup`, `resume`, `clear`, `compact` or `fork`), `cwd`, `transcriptPath`, and `model`, `agentType` when known |
 | `session.ended` | A session ends | `reason` (`prompt_input_exit`, `clear`, `resume`, `logout` or `other`), `resumeId` (what `claude --resume` takes) |
 | `turn.started` | A model turn begins | `turnId`, `prompt` |
