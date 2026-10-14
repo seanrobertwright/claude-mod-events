@@ -66,9 +66,9 @@ function serveOnce(commands: unknown[]) {
 }
 
 describe('Inbox', () => {
-  test('does not start without a token', async () => {
+  test('does not start unless host commands are on', async () => {
     const { host, inbox } = setup(() => reply(204))
-    inbox.start(host.ports, { ...CONFIG, token: undefined })
+    inbox.start(host.ports, { ...CONFIG, hostCommands: false })
     await host.advance(5000)
     expect(inbox.isRunning).toBe(false)
     expect(host.requests.length).toBe(0)

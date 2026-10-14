@@ -50,6 +50,7 @@ export type EnvCarry = {
   readonly tag: string | null
   readonly tools: string | null
   readonly permissions: string | null
+  readonly commands: string | null
 }
 
 declare module 'claude-code' {

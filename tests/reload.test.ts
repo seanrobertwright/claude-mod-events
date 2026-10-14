@@ -11,7 +11,12 @@ type StateRef = { readonly plugin: string; readonly key: string; readonly id?: s
 /** How the host's listener answers `/v1/events`: takes them, refuses the connection, or never answers. */
 type EventsMode = 'up' | 'down' | 'hold'
 
-const HOST = { CLAUDE_EVENTS_URL: 'http://127.0.0.1:47800', CLAUDE_EVENTS_TOKEN: 'secret', CLAUDE_EVENTS_TAG: 'pane-7' }
+const HOST = {
+  CLAUDE_EVENTS_URL: 'http://127.0.0.1:47800',
+  CLAUDE_EVENTS_TOKEN: 'secret',
+  CLAUDE_EVENTS_TAG: 'pane-7',
+  CLAUDE_EVENTS_COMMANDS: 'host',
+}
 
 function reply(status: number, text = ''): HttpResponse {
   return { status, ok: status >= 200 && status < 300, headers: {}, text }
@@ -23,7 +28,7 @@ function reply(status: number, text = ''): HttpResponse {
  * its timers dropped, its `$` calls never settling. `$.state` is held here
  * across loads, as the engine holds it, and so is the host's listener.
  */
-function reloadingSession(variables: Record<string, string>) {
+function reloadingSession(variables: Record<string, string>, { isInteractive = true } = {}) {
   const env = new Map(Object.entries(variables))
   let now = 0
   let load = 0
@@ -109,7 +114,7 @@ function reloadingSession(variables: Record<string, string>) {
     }) as unknown as On
     await register(on, {})
     $ = engineFor(load)
-    await fire('session.start', { cwd: '/work', surface: null, isInteractive: true })
+    await fire('session.start', { cwd: '/work', surface: isInteractive ? 'terminal' : null, isInteractive })
   }
 
   return {
@@ -288,6 +293,24 @@ describe('event-bridge across a hot reload', () => {
     expect(after[0]?.searchParams.get('boot')).not.toBe(bootA)
     expect(after[0]?.searchParams.get('after')).toBe('c1')
   })
+
+  test('takes no commands after a reload of a headless run, and still sends its events', async () => {
+    const w = reloadingSession(HOST, { isInteractive: false })
+    await w.start()
+    await w.advance(200)
+
+    await w.reload()
+    await w.fire('turn.start', { text: 'go', turnId: 'turn-1' })
+    await w.advance(10_000)
+
+    expect(w.polls).toEqual([])
+    expect(byBoot(w.delivered)).toEqual([
+      ['A', 1, 'boot.started'],
+      ['A', 2, 'session.started'],
+      ['B', 1, 'boot.started'],
+      ['B', 2, 'turn.started'],
+    ])
+  })
 })
 
 describe('event-bridge with its variables cleared', () => {
@@ -306,7 +329,7 @@ describe('event-bridge with its variables cleared', () => {
       ['B', 1, 'boot.started'],
       ['B', 2, 'turn.started'],
     ])
-    // The inbox runs only with a token, so a poll from B means B has it.
+    // The inbox runs only with a token and CLAUDE_EVENTS_COMMANDS=host, so a poll from B means B has both.
     expect(w.polls.some(poll => poll.searchParams.get('boot') === w.delivered.at(-1)?.boot)).toBe(true)
   })
 

@@ -8,12 +8,13 @@ export type ToolDetail = 'summary' | 'full'
 export type Config = {
   /** Base URL with no trailing slash: `${url}/v1/events` and so on. */
   readonly url: string
-  /** Bearer token; inbound commands and host permissions need it. */
+  /** Bearer token; commands from the host and host permissions need it. */
   readonly token: string | undefined
   /** The host's own label, echoed on every event. */
   readonly tag: string | undefined
   readonly toolDetail: ToolDetail
   readonly hostPermissions: boolean
+  readonly hostCommands: boolean
 }
 
 /**
@@ -26,6 +27,7 @@ export type RawEnv = {
   readonly tag: string | undefined
   readonly tools: string | undefined
   readonly permissions: string | undefined
+  readonly commands: string | undefined
 }
 
 /**
@@ -45,7 +47,7 @@ const MAX_TAG_LENGTH = 256
 const TOKEN_PATTERN = /^[\x21-\x7e]+$/
 const CONTROL_PATTERN = /[\x00-\x1f\x7f]/
 
-const ENV_FIELDS = ['url', 'token', 'tag', 'tools', 'permissions'] as const
+const ENV_FIELDS = ['url', 'token', 'tag', 'tools', 'permissions', 'commands'] as const
 
 /** Whether any of the bridge's variables was set. */
 export function anySet(env: RawEnv): boolean {
@@ -60,6 +62,7 @@ export function withCarried(env: RawEnv, carried: RawEnv | undefined): RawEnv {
     tag: env.tag ?? carried?.tag,
     tools: env.tools ?? carried?.tools,
     permissions: env.permissions ?? carried?.permissions,
+    commands: env.commands ?? carried?.commands,
   }
 }
 
@@ -70,23 +73,25 @@ export function toEnvCarry(env: RawEnv): EnvCarry {
     tag: env.tag ?? null,
     tools: env.tools ?? null,
     permissions: env.permissions ?? null,
+    commands: env.commands ?? null,
   }
 }
 
 /**
  * Variables read back from `$.state`, or undefined when they are not that
  * shape. `parseConfig` checks the values themselves, as it does the
- * environment's.
+ * environment's. A variable the carry lacks counts as unset: a reload into a
+ * newer copy of the mod can find a carry written before that variable existed.
  */
 export function parseEnvCarry(raw: unknown): RawEnv | undefined {
   if (!isRecord(raw)) return undefined
   const env: { [K in (typeof ENV_FIELDS)[number]]?: string } = {}
   for (const name of ENV_FIELDS) {
     const value = field(raw, name)
-    if (value !== null && typeof value !== 'string') return undefined
+    if (value !== undefined && value !== null && typeof value !== 'string') return undefined
     if (typeof value === 'string') env[name] = value
   }
-  return { url: env.url, token: env.token, tag: env.tag, tools: env.tools, permissions: env.permissions }
+  return { url: env.url, token: env.token, tag: env.tag, tools: env.tools, permissions: env.permissions, commands: env.commands }
 }
 
 /** An env value trimmed, or undefined when unset or blank. */
@@ -105,6 +110,19 @@ function optionString(options: PluginOptions, key: string): string | undefined {
 function optionBoolean(options: PluginOptions, key: string): boolean {
   if (!Object.hasOwn(options, key)) return false
   return options[key] === true
+}
+
+/** A power the host gets only when asked for: `host` or `off` in its variable, else its boolean option. */
+function hostSwitch(
+  variable: string,
+  value: string | undefined,
+  options: PluginOptions,
+  option: string,
+): { ok: true; on: boolean } | { ok: false; reason: string } {
+  if (value === undefined) return { ok: true, on: optionBoolean(options, option) }
+  if (value === 'host') return { ok: true, on: true }
+  if (value === 'off') return { ok: true, on: false }
+  return { ok: false, reason: `${variable} must be host or off, not "${value}"` }
 }
 
 /** The base URL, or the reason it is refused. */
@@ -168,27 +186,27 @@ export function parseConfig(env: RawEnv, options: PluginOptions): ConfigResult {
     return { kind: 'invalid', reason: `tool detail must be summary or full, not "${tools}"` }
   }
 
-  const permissions = present(env.permissions)
-  let hostPermissions: boolean
-  if (permissions === undefined) {
-    hostPermissions = optionBoolean(options, 'hostPermissions')
-  } else if (permissions === 'host') {
-    hostPermissions = true
-  } else if (permissions === 'off') {
-    hostPermissions = false
-  } else {
-    return { kind: 'invalid', reason: `CLAUDE_EVENTS_PERMISSIONS must be host or off, not "${permissions}"` }
-  }
+  const permissions = hostSwitch('CLAUDE_EVENTS_PERMISSIONS', present(env.permissions), options, 'hostPermissions')
+  if (!permissions.ok) return { kind: 'invalid', reason: permissions.reason }
+  const commands = hostSwitch('CLAUDE_EVENTS_COMMANDS', present(env.commands), options, 'hostCommands')
+  if (!commands.ok) return { kind: 'invalid', reason: commands.reason }
 
   const warnings: string[] = []
-  if (hostPermissions && token === undefined) {
-    hostPermissions = false
-    warnings.push('host permissions are off: they need a token')
+  if (token === undefined) {
+    if (permissions.on) warnings.push('host permissions are off: they need a token')
+    if (commands.on) warnings.push('host commands are off: they need a token')
   }
 
   return {
     kind: 'on',
-    config: { url: url.url, token, tag, toolDetail: tools, hostPermissions },
+    config: {
+      url: url.url,
+      token,
+      tag,
+      toolDetail: tools,
+      hostPermissions: permissions.on && token !== undefined,
+      hostCommands: commands.on && token !== undefined,
+    },
     warnings,
   }
 }

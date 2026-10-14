@@ -94,7 +94,8 @@ export function parseInboxCarry(raw: unknown): InboxCarry | undefined {
 
 /**
  * Long-polls the host for commands and runs them. Each poll's timer starts
- * the next, so the loop outlives any one hook. It runs only with a token.
+ * the next, so the loop outlives any one hook. It runs only when host
+ * commands are on, which the config allows only with a token.
  *
  * While it runs it keeps the running turn and the last command id in
  * `$.state`, through `ports.carryInbox`, so the copy a hot reload starts can
@@ -130,7 +131,7 @@ export class Inbox {
 
   /** Starts polling. `carry` is what an earlier load of the module left. */
   start(ports: Ports, config: Config, carry?: InboxCarry): void {
-    if (this.running || config.token === undefined) return
+    if (this.running || !config.hostCommands) return
     this.ports = ports
     this.config = config
     this.running = true

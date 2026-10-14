@@ -10,6 +10,7 @@ export const CONFIG: Config = {
   tag: 'pane-7',
   toolDetail: 'summary',
   hostPermissions: false,
+  hostCommands: true,
 }
 
 /** What the engine answers `$.session.version()` with in a test session: a development build's. */

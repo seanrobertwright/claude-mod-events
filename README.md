@@ -8,8 +8,10 @@ starts `claude`, or a terminal multiplexer that runs sessions in panes.
   mod begins, session start and end, turn start and completion (with token
   usage), notifications and permission dialogs, and every tool call with its
   result, sent as batched JSON to an HTTP listener the host runs.
-- **Commands in.** The host can submit a prompt, interrupt the running turn, or
-  show a toast in the session.
+- **Commands in, if you allow it.** With `CLAUDE_EVENTS_COMMANDS=host`, the
+  host can submit a prompt, interrupt the running turn, or show a toast in an
+  interactive session. A headless run (`claude -p`, the SDK) sends events but
+  takes no commands, so no held poll delays its exit.
 - **Permissions, if you allow it.** The host can allow or deny a tool call that
   would otherwise ask the person.
 
@@ -30,16 +32,18 @@ changes between releases. This version was built and tested against Claude Code
    CLAUDE_EVENTS_URL=http://127.0.0.1:47800
    CLAUDE_EVENTS_TOKEN=<the random token>
    CLAUDE_EVENTS_TAG=<your id for this session or pane>
+   CLAUDE_EVENTS_COMMANDS=host   # only if the host sends commands
    ```
 
-4. Read events from `POST /v1/events`, answer the long-poll on
-   `GET /v1/commands` when you have something to send, and, if you turned host
-   permissions on, decide `POST /v1/permission`.
+4. Read events from `POST /v1/events`. If you turned commands on, answer the
+   long-poll on `GET /v1/commands` when you have something to send. If you
+   turned host permissions on, decide `POST /v1/permission`.
 
 `CLAUDE_EVENTS_TOOLS=full` sends tool inputs and results whole, up to 1 MiB
-per event, instead of cutting long strings to 2 KB. `CLAUDE_EVENTS_PERMISSIONS=host` turns host
-permissions on. The same settings exist as plugin options for a fixed host.
-[PROTOCOL.md](PROTOCOL.md) has every event, command and status code.
+per event, instead of cutting long strings to 2 KB. `CLAUDE_EVENTS_COMMANDS=host`
+turns commands on and `CLAUDE_EVENTS_PERMISSIONS=host` turns host permissions
+on; both need the token. The same settings exist as plugin options for a fixed
+host. [PROTOCOL.md](PROTOCOL.md) has every event, command and status code.
 
 ## Try it
 
@@ -54,7 +58,7 @@ In another terminal, with the mod installed (below) or loaded from this folder:
 
 ```sh
 CLAUDE_EVENTS_URL=http://127.0.0.1:47800 CLAUDE_EVENTS_TOKEN=try-it-out-1234 \
-  claude --plugin-dir .
+  CLAUDE_EVENTS_COMMANDS=host claude --plugin-dir .
 ```
 
 In PowerShell, set the variables first:
@@ -62,6 +66,7 @@ In PowerShell, set the variables first:
 ```powershell
 $env:CLAUDE_EVENTS_URL = 'http://127.0.0.1:47800'
 $env:CLAUDE_EVENTS_TOKEN = 'try-it-out-1234'
+$env:CLAUDE_EVENTS_COMMANDS = 'host'
 claude --plugin-dir .
 ```
 
@@ -90,8 +95,10 @@ no host sets `CLAUDE_EVENTS_URL`.
 ## Security
 
 A host that can send `prompt` commands controls the session, including one
-started with `--dangerously-skip-permissions`. The mod takes commands and asks
-permissions only when a token is set. A host must:
+started with `--dangerously-skip-permissions`. The mod takes commands only
+when `CLAUDE_EVENTS_COMMANDS=host` or its option turns them on, and asks
+permissions only when `CLAUDE_EVENTS_PERMISSIONS=host` or its option does.
+Each needs a token. A host must:
 
 - bind its listener to loopback only,
 - use a fresh random token and check it in constant time,
