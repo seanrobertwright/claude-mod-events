@@ -14,7 +14,14 @@ function ok(text = ''): HttpResponse {
  * the clock, the host's HTTP listener and the engine's own events.
  */
 function world(on: On, env: Record<string, string>, commands: unknown[] = []) {
-  mock.env(on, env)
+  // The environment as the engine keeps it: what a plugin sets or clears, later reads see.
+  const vars = new Map(Object.entries(env))
+  on('env.get', ($, e) => ({ value: vars.get(e.name) }))
+  on('env.set', ($, e) => {
+    if (e.value === undefined) vars.delete(e.name)
+    else vars.set(e.name, e.value)
+    return { value: undefined }
+  })
   const clock = mock.clock(on)
   const sent: Sent[] = []
   const prompts: string[] = []
@@ -63,6 +70,8 @@ function world(on: On, env: Record<string, string>, commands: unknown[] = []) {
 
   return {
     clock,
+    /** The environment now, as a command Claude runs would inherit it. */
+    env: () => Object.fromEntries(vars),
     sent,
     prompts,
     aborts,
@@ -241,5 +250,25 @@ describe('event-bridge in a session', () => {
     await $.session.start({ cwd: '/work', surface: null, isInteractive: false })
     const verdict = await $.tool.check({ tool: 'Bash', input: { command: 'rm' }, tool_use_id: 'tu_9', ceiling: 'ask' })
     expect(verdict.decision).toBe('ask')
+  })
+})
+
+describe('event-bridge and the environment Claude passes on', () => {
+  test('clears its variables once read, so the commands Claude runs never see them', async ($, on) => {
+    const w = world(on, { ...HOST, CLAUDE_EVENTS_TOOLS: 'full', CLAUDE_EVENTS_PERMISSIONS: 'host', HOME: '/home/me' })
+    await $.session.start({ cwd: '/work', surface: null, isInteractive: true })
+    expect(w.env()).toEqual({ HOME: '/home/me' })
+
+    await $.classic.SessionStart({ source: 'startup', session_id: 's-1' })
+    await w.clock.advance(200)
+    expect(w.events().map(event => event.type)).toEqual(['session.started'])
+    expect(w.sent.find(request => request.url.endsWith('/v1/events'))?.headers?.authorization).toBe('Bearer secret')
+  })
+
+  test('clears a token even when the URL beside it leaves the mod idle', async ($, on) => {
+    const w = world(on, { CLAUDE_EVENTS_URL: 'http://10.0.0.5:1', CLAUDE_EVENTS_TOKEN: 'secret' })
+    await $.session.start({ cwd: '/work', surface: null, isInteractive: true })
+    expect(w.env()).toEqual({})
+    expect(w.logs.length).toBe(1)
   })
 })

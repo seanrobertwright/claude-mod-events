@@ -148,7 +148,8 @@ export class Inbox {
     this.timer = undefined
   }
 
-  private carry(): void {
+  /** Writes the running turn and the last command id to `$.state`, while it runs. */
+  carry(): void {
     if (this.running) this.ports?.carryInbox({ turnId: this.turnId ?? null, lastId: this.lastId ?? null })
   }
 

@@ -39,8 +39,21 @@ export type InboxCarry = {
   readonly lastId: string | null
 }
 
+/**
+ * The bridge's variables as the mod read them. It clears them from the
+ * environment, so the commands Claude runs never inherit them, and keeps them
+ * here for the load a hot reload starts. Null for one that was unset.
+ */
+export type EnvCarry = {
+  readonly url: string | null
+  readonly token: string | null
+  readonly tag: string | null
+  readonly tools: string | null
+  readonly permissions: string | null
+}
+
 declare module 'claude-code' {
   interface PluginState {
-    'event-bridge': { outbox: OutboxCarry; inbox: InboxCarry }
+    'event-bridge': { outbox: OutboxCarry; inbox: InboxCarry; env: EnvCarry }
   }
 }
