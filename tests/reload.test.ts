@@ -22,7 +22,8 @@ function reply(status: number, text = ''): HttpResponse {
  * its timers dropped, its `$` calls never settling. `$.state` is held here
  * across loads, as the engine holds it, and so is the host's listener.
  */
-function reloadingSession(env: Record<string, string>) {
+function reloadingSession(variables: Record<string, string>) {
+  const env = new Map(Object.entries(variables))
   let now = 0
   let load = 0
   let hooks = new Map<string, Hook>()
@@ -41,7 +42,14 @@ function reloadingSession(env: Record<string, string>) {
     const answer = <T>(value: () => T): Promise<T> => (gone() ? never : Promise.resolve().then(value))
     const key = (ref: StateRef) => `${ref.plugin}/${ref.key}/${ref.id ?? ''}`
     return {
-      env: { get: (name: string) => answer(() => env[name]) },
+      env: {
+        get: (name: string) => answer(() => env.get(name)),
+        set: (name: string, value: string | undefined) =>
+          answer(() => {
+            if (value === undefined) env.delete(name)
+            else env.set(name, value)
+          }),
+      },
       session: { id: () => answer(() => 's-1') },
       clock: {
         now: () => answer(() => now),
@@ -108,6 +116,10 @@ function reloadingSession(env: Record<string, string>) {
     polls,
     aborts,
     fire,
+    /** The environment now, as a command Claude runs would inherit it. */
+    env: () => Object.fromEntries(env),
+    /** Empties `$.state`, as a `/clear` or a resume may. */
+    clearState: () => state.clear(),
     async start(): Promise<void> {
       await loadAndStart()
       await fire('classic.SessionStart', { source: 'startup', session_id: 's-1' })
@@ -243,5 +255,41 @@ describe('event-bridge across a hot reload', () => {
     expect(after.length).toBe(1)
     expect(after[0]?.searchParams.get('boot')).not.toBe(bootA)
     expect(after[0]?.searchParams.get('after')).toBe('c1')
+  })
+})
+
+describe('event-bridge with its variables cleared', () => {
+  test('still reaches the host after a reload, though the environment no longer holds them', async () => {
+    const w = reloadingSession(HOST)
+    await w.start()
+    await w.advance(200)
+    expect(w.env()).toEqual({})
+
+    await w.reload()
+    await w.fire('turn.start', { text: 'go', turnId: 'turn-1' })
+    await w.advance(1000)
+    expect(byBoot(w.delivered)).toEqual([
+      ['A', 1, 'session.started'],
+      ['B', 1, 'turn.started'],
+    ])
+    // The inbox runs only with a token, so a poll from B means B has it.
+    expect(w.polls.some(poll => poll.searchParams.get('boot') === w.delivered[1]?.boot)).toBe(true)
+  })
+
+  test('still reaches the host after a /clear that empties $.state, then a reload', async () => {
+    const w = reloadingSession(HOST)
+    await w.start()
+    await w.advance(200)
+    await w.fire('session.end', { reason: 'clear', sessionId: 's-1', resume: { id: 's-1' } })
+    w.clearState()
+    await w.fire('classic.SessionStart', { source: 'clear', session_id: 's-2' })
+    await w.advance(200)
+
+    await w.reload()
+    await w.fire('turn.start', { text: 'go', turnId: 'turn-1' })
+    await w.advance(1000)
+    expect(w.env()).toEqual({})
+    expect(byBoot(w.delivered).at(-1)).toEqual(['B', 1, 'turn.started'])
+    expect(w.polls.at(-1)?.searchParams.get('tag')).toBe('pane-7')
   })
 })

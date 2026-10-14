@@ -1,4 +1,6 @@
 import type { PluginOptions } from 'claude-code'
+import type { EnvCarry } from '../types'
+import { field, isRecord } from './events'
 
 export type ToolDetail = 'summary' | 'full'
 
@@ -42,6 +44,50 @@ const MAX_TAG_LENGTH = 256
 // Visible ASCII only: a token goes into a header, so no spaces or line breaks.
 const TOKEN_PATTERN = /^[\x21-\x7e]+$/
 const CONTROL_PATTERN = /[\x00-\x1f\x7f]/
+
+const ENV_FIELDS = ['url', 'token', 'tag', 'tools', 'permissions'] as const
+
+/** Whether any of the bridge's variables was set. */
+export function anySet(env: RawEnv): boolean {
+  return ENV_FIELDS.some(name => env[name] !== undefined)
+}
+
+/** Each variable as it was read, or else as an earlier load kept it. */
+export function withCarried(env: RawEnv, carried: RawEnv | undefined): RawEnv {
+  return {
+    url: env.url ?? carried?.url,
+    token: env.token ?? carried?.token,
+    tag: env.tag ?? carried?.tag,
+    tools: env.tools ?? carried?.tools,
+    permissions: env.permissions ?? carried?.permissions,
+  }
+}
+
+export function toEnvCarry(env: RawEnv): EnvCarry {
+  return {
+    url: env.url ?? null,
+    token: env.token ?? null,
+    tag: env.tag ?? null,
+    tools: env.tools ?? null,
+    permissions: env.permissions ?? null,
+  }
+}
+
+/**
+ * Variables read back from `$.state`, or undefined when they are not that
+ * shape. `parseConfig` checks the values themselves, as it does the
+ * environment's.
+ */
+export function parseEnvCarry(raw: unknown): RawEnv | undefined {
+  if (!isRecord(raw)) return undefined
+  const env: { [K in (typeof ENV_FIELDS)[number]]?: string } = {}
+  for (const name of ENV_FIELDS) {
+    const value = field(raw, name)
+    if (value !== null && typeof value !== 'string') return undefined
+    if (typeof value === 'string') env[name] = value
+  }
+  return { url: env.url, token: env.token, tag: env.tag, tools: env.tools, permissions: env.permissions }
+}
 
 /** An env value trimmed, or undefined when unset or blank. */
 function present(value: string | undefined): string | undefined {

@@ -1,6 +1,6 @@
 import type { EngineInterface, PluginOptions, Register } from 'claude-code'
 import type { InboxCarry } from '../types'
-import { type Config, type ToolDetail, parseConfig } from './config'
+import { type Config, type RawEnv, type ToolDetail, anySet, parseConfig, parseEnvCarry, toEnvCarry, withCarried } from './config'
 import {
   nowMs,
   notificationData,
@@ -27,6 +27,7 @@ const END_FLUSH_MIN_MS = 200
 /** What each load leaves for the next: `$.state` outlives a hot reload, the module's memory does not. */
 const OUTBOX_CARRY = { plugin: 'event-bridge', key: 'outbox' } as const
 const INBOX_CARRY = { plugin: 'event-bridge', key: 'inbox' } as const
+const ENV_CARRY = { plugin: 'event-bridge', key: 'env' } as const
 
 /** What one load of the module holds. A hot reload starts a fresh one. */
 type Bridge = {
@@ -34,6 +35,8 @@ type Bridge = {
   readonly outbox: Outbox
   readonly inbox: Inbox
   config: Config | undefined
+  /** The variables this load runs with, once read; kept in `$.state` for the next load. */
+  env: RawEnv | undefined
   starting: Promise<void> | undefined
 }
 
@@ -55,13 +58,50 @@ function portsFor($: EngineInterface): Ports {
 }
 
 /** What the load before this one left, or nothing when this is the first load or it cannot be read. */
-async function readCarries($: EngineInterface): Promise<{ outbox?: Carry; inbox?: InboxCarry }> {
+async function readCarries($: EngineInterface): Promise<{ outbox?: Carry; inbox?: InboxCarry; env?: RawEnv }> {
   try {
-    const [outbox, inbox] = await Promise.all([$.state.get(OUTBOX_CARRY), $.state.get(INBOX_CARRY)])
-    return { outbox: parseOutboxCarry(outbox.value), inbox: parseInboxCarry(inbox.value) }
+    const [outbox, inbox, env] = await Promise.all([$.state.get(OUTBOX_CARRY), $.state.get(INBOX_CARRY), $.state.get(ENV_CARRY)])
+    return { outbox: parseOutboxCarry(outbox.value), inbox: parseInboxCarry(inbox.value), env: parseEnvCarry(env.value) }
   } catch {
     return {}
   }
+}
+
+/**
+ * Reads the bridge's variables, then clears each one that was set. Every
+ * process Claude Code starts afterwards inherits its environment: the
+ * commands Claude runs, which a prompt injection can steer, and a `claude`
+ * started from the session, which would otherwise join the host as this one.
+ */
+async function takeEnv($: EngineInterface): Promise<RawEnv> {
+  const env: RawEnv = {
+    url: await $.env.get('CLAUDE_EVENTS_URL'),
+    token: await $.env.get('CLAUDE_EVENTS_TOKEN'),
+    tag: await $.env.get('CLAUDE_EVENTS_TAG'),
+    tools: await $.env.get('CLAUDE_EVENTS_TOOLS'),
+    permissions: await $.env.get('CLAUDE_EVENTS_PERMISSIONS'),
+  }
+  const clearing = await Promise.allSettled([
+    env.url === undefined ? undefined : $.env.set('CLAUDE_EVENTS_URL', undefined),
+    env.token === undefined ? undefined : $.env.set('CLAUDE_EVENTS_TOKEN', undefined),
+    env.tag === undefined ? undefined : $.env.set('CLAUDE_EVENTS_TAG', undefined),
+    env.tools === undefined ? undefined : $.env.set('CLAUDE_EVENTS_TOOLS', undefined),
+    env.permissions === undefined ? undefined : $.env.set('CLAUDE_EVENTS_PERMISSIONS', undefined),
+  ])
+  if (clearing.some(outcome => outcome.status === 'rejected')) {
+    portsFor($).log('could not clear the CLAUDE_EVENTS_ variables; commands Claude runs can read them', 'transcript')
+  }
+  return env
+}
+
+/**
+ * Writes what the next load needs and `$.state` may have lost: the variables
+ * and the inbox's carry. A `/clear` or a resume may empty `$.state` without
+ * reloading the module, so the hooks write them again after each.
+ */
+function keepCarries($: EngineInterface, bridge: Bridge): void {
+  if (bridge.env !== undefined) void $.state.set(ENV_CARRY, toEnvCarry(bridge.env)).catch(() => undefined)
+  bridge.inbox.carry()
 }
 
 /** Reads the config once per load, from whichever hook runs first. */
@@ -71,16 +111,15 @@ function start($: EngineInterface, bridge: Bridge): Promise<void> {
 }
 
 async function readConfig($: EngineInterface, bridge: Bridge): Promise<void> {
-  const result = parseConfig(
-    {
-      url: await $.env.get('CLAUDE_EVENTS_URL'),
-      token: await $.env.get('CLAUDE_EVENTS_TOKEN'),
-      tag: await $.env.get('CLAUDE_EVENTS_TAG'),
-      tools: await $.env.get('CLAUDE_EVENTS_TOOLS'),
-      permissions: await $.env.get('CLAUDE_EVENTS_PERMISSIONS'),
-    },
-    bridge.options,
-  )
+  const fromEnv = await takeEnv($)
+  const carried = await readCarries($)
+  // After the first load the environment no longer holds them: a reload finds them kept.
+  const env = withCarried(fromEnv, carried.env)
+  if (anySet(env)) {
+    bridge.env = env
+    keepCarries($, bridge)
+  }
+  const result = parseConfig(env, bridge.options)
   if (result.kind === 'off') {
     bridge.outbox.disable()
     return
@@ -94,7 +133,6 @@ async function readConfig($: EngineInterface, bridge: Bridge): Promise<void> {
   bridge.config = result.config
   for (const warning of result.warnings) ports.log(warning, 'transcript')
   bridge.outbox.sessionId ??= await $.session.id()
-  const carried = await readCarries($)
   bridge.outbox.start(ports, result.config, carried.outbox)
   bridge.inbox.start(ports, result.config, carried.inbox)
 }
@@ -110,7 +148,7 @@ function passThrough<E, R>(_$: unknown, e: E, next: (e: E) => R): R {
 
 export const register: Register = (on, options) => {
   const outbox = new Outbox()
-  const bridge: Bridge = { options, outbox, inbox: new Inbox(outbox), config: undefined, starting: undefined }
+  const bridge: Bridge = { options, outbox, inbox: new Inbox(outbox), config: undefined, env: undefined, starting: undefined }
   const { inbox } = bridge
   const detail = (): ToolDetail => bridge.config?.toolDetail ?? 'summary'
 
@@ -122,7 +160,7 @@ export const register: Register = (on, options) => {
   on('classic.SessionStart', ($, e, next) => {
     outbox.sessionId = e.session_id
     outbox.emit('session.started', sessionStartedData(e))
-    void start($, bridge)
+    void start($, bridge).then(() => keepCarries($, bridge))
     return next(e)
   }).catch(passThrough)
 

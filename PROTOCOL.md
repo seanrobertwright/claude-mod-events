@@ -26,6 +26,23 @@ A value the mod cannot use (a remote `http` URL, a token with spaces, an
 unknown `CLAUDE_EVENTS_TOOLS`) leaves the mod idle, and it writes one line
 saying why in the session's transcript.
 
+The mod reads these as the session starts and then clears them from Claude
+Code's environment. The processes Claude Code starts after that don't inherit
+them: the commands Claude runs, and a `claude` started from inside the
+session, which would otherwise join the host as a second session under the
+same tag. The mod keeps the values in the session's `$.state`, where a hot
+reload finds them and other plugins in the session can read them.
+
+Clearing keeps the values out of what a process is handed, not out of reach:
+
+- Processes Claude Code started before the mod cleared them keep their copy.
+  In a live check on Claude Code 2.1.296, MCP servers and settings
+  `SessionStart` command hooks run at startup still saw them.
+- A process running as the same user can read the environment Claude Code
+  started with, for example from `/proc/<pid>/environ` on Linux, which a
+  later change does not alter. The shell that started Claude Code may hold
+  the values too.
+
 ## Events: `POST {url}/v1/events`
 
 Body: `{ "events": [Envelope, ...] }`, at most 200 per request and 3 MiB
@@ -182,6 +199,12 @@ started with `--dangerously-skip-permissions`. So:
 - Generate a fresh random token for each session or pane, pass it in
   `CLAUDE_EVENTS_TOKEN`, and refuse any request whose `Authorization` header
   does not match it. Compare in constant time.
+- Don't count on the token staying secret inside the session. The commands
+  Claude runs no longer inherit it, but processes that started before the mod
+  cleared it have it, other plugins can read it from `$.state`, and a process
+  of the same user can dig it out of the environment Claude Code started with
+  (see Discovery). A fresh token per session keeps that exposure to the
+  session it belongs to.
 - Refuse any request that carries an `Origin` header, and any whose `Host`
   header is not your own `127.0.0.1:<port>` or `localhost:<port>`. That stops
   web pages from reaching the listener, directly or through DNS rebinding.
