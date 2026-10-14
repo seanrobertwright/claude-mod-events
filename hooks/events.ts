@@ -1,7 +1,14 @@
 import type { JsonValue } from 'claude-code'
 import type { ToolDetail } from './config'
 
+/**
+ * The mod's own version, as `.claude-plugin/plugin.json` states it: held here
+ * so the mod reads no file to learn it. `scripts/check.sh` fails when they differ.
+ */
+export const MOD_VERSION = '0.1.0'
+
 export const EVENT_TYPES = [
+  'boot.started',
   'session.started',
   'session.ended',
   'turn.started',
@@ -126,6 +133,25 @@ function compact(fields: { readonly [key: string]: JsonValue | undefined }): Eve
     if (value !== undefined) out[key] = value
   }
   return out
+}
+
+function stringField(record: { readonly [key: string]: unknown }, key: string): string | undefined {
+  const value = field(record, key)
+  return typeof value === 'string' ? value : undefined
+}
+
+/**
+ * `answer` is what `$.session.version()` answered, or undefined when it
+ * failed. The mod API changes between releases, so the answer is read field
+ * by field, and without a `version` the host gets no `claudeCode` at all.
+ */
+export function bootStartedData(answer: unknown): EventData {
+  const version = isRecord(answer) ? stringField(answer, 'version') : undefined
+  if (!isRecord(answer) || version === undefined) return { version: MOD_VERSION }
+  return {
+    version: MOD_VERSION,
+    claudeCode: compact({ version, base: stringField(answer, 'base'), builtAt: stringField(answer, 'builtAt') }),
+  }
 }
 
 export type SessionStartedFields = {

@@ -3,6 +3,8 @@
 #  1. No file git would commit holds the replacement character U+FFFD or the
 #     author's local user name (which also covers home paths and the email).
 #  2. markdownlint passes on every Markdown file.
+#  3. The mod's version in its code, which it reports to the host, is the one
+#     .claude-plugin/plugin.json states. Its tests cannot read the manifest.
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -24,5 +26,12 @@ while IFS= read -r -d '' file; do
 done < <(git ls-files -z --cached --others --exclude-standard)
 
 npx --yes markdownlint-cli2@0.13.0 "**/*.md" || status=1
+
+manifest_version="$(node -p "require('./.claude-plugin/plugin.json').version")"
+code_version="$(sed -n "s/^export const MOD_VERSION = '\([^']*\)'$/\1/p" hooks/events.ts)"
+if [ -z "$code_version" ] || [ "$code_version" != "$manifest_version" ]; then
+  echo "check: MOD_VERSION in hooks/events.ts is \"$code_version\", but .claude-plugin/plugin.json states \"$manifest_version\"" >&2
+  status=1
+fi
 
 exit "$status"

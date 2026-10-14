@@ -4,7 +4,8 @@
 follow what each session does and steer it. The host can be your own app that
 starts `claude`, or a terminal multiplexer that runs sessions in panes.
 
-- **Events out.** Session start and end, turn start and completion (with token
+- **Events out.** The mod's own version and Claude Code's as each load of the
+  mod begins, session start and end, turn start and completion (with token
   usage), notifications and permission dialogs, and every tool call with its
   result, sent as batched JSON to an HTTP listener the host runs.
 - **Commands in.** The host can submit a prompt, interrupt the running turn, or

@@ -1,7 +1,8 @@
-import type { EngineInterface, PluginOptions, Register } from 'claude-code'
+import type { EngineInterface, PluginOptions, Register, SessionVersion } from 'claude-code'
 import type { InboxCarry } from '../types'
 import { type Config, type RawEnv, type ToolDetail, anySet, parseConfig, parseEnvCarry, toEnvCarry, withCarried } from './config'
 import {
+  bootStartedData,
   nowMs,
   notificationData,
   permissionRequestedData,
@@ -104,6 +105,15 @@ function keepCarries($: EngineInterface, bridge: Bridge): void {
   bridge.inbox.carry()
 }
 
+/** Claude Code's version, or undefined when the engine cannot say it: the boot opens either way. */
+async function claudeCodeVersion($: EngineInterface): Promise<SessionVersion | undefined> {
+  try {
+    return await $.session.version()
+  } catch {
+    return undefined
+  }
+}
+
 /** Reads the config once per load, from whichever hook runs first. */
 function start($: EngineInterface, bridge: Bridge): Promise<void> {
   bridge.starting ??= readConfig($, bridge)
@@ -133,7 +143,7 @@ async function readConfig($: EngineInterface, bridge: Bridge): Promise<void> {
   bridge.config = result.config
   for (const warning of result.warnings) ports.log(warning, 'transcript')
   bridge.outbox.sessionId ??= await $.session.id()
-  bridge.outbox.start(ports, result.config, carried.outbox)
+  bridge.outbox.start(ports, result.config, carried.outbox, bootStartedData(await claudeCodeVersion($)))
   bridge.inbox.start(ports, result.config, carried.inbox)
 }
 
