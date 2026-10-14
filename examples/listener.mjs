@@ -8,8 +8,8 @@
 //   CLAUDE_EVENTS_URL=http://127.0.0.1:47800 CLAUDE_EVENTS_TOKEN=<secret> \
 //     CLAUDE_EVENTS_COMMANDS=host claude
 //
-// Without CLAUDE_EVENTS_COMMANDS=host the session sends events but never polls,
-// so the commands typed here never reach it.
+// Without CLAUDE_EVENTS_COMMANDS=host (or the plugin's hostCommands option) the
+// session sends events but never polls, so the commands typed here never reach it.
 //
 // It serves one session at a time: commands go to whichever session polls
 // next. A real host routes them by the `session` and `tag` query parameters.
@@ -44,7 +44,8 @@ function parseArgs(argv) {
       console.log('usage: node examples/listener.mjs [--port 47800] [--token <secret>]')
       console.log('With no --token, a random one is made and printed.')
       console.log('Start claude with CLAUDE_EVENTS_URL, CLAUDE_EVENTS_TOKEN and CLAUDE_EVENTS_COMMANDS=host.')
-      console.log('Without CLAUDE_EVENTS_COMMANDS=host it never polls, and the commands typed here never reach it.')
+      console.log('Without CLAUDE_EVENTS_COMMANDS=host (or the hostCommands option) it never polls,')
+      console.log('and the commands typed here never reach it.')
       process.exit(0)
     } else if (flag === '--token') {
       if (value === undefined || !/^[\x21-\x7e]{8,4096}$/.test(value)) fail('--token needs 8 or more visible ASCII characters')

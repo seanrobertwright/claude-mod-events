@@ -21,7 +21,7 @@ the plugin's settings.
 | `CLAUDE_EVENTS_TAG` | (none) | The host's own label for this session, such as a pane id. Echoed on every event and on each command poll. At most 256 characters, no control characters. |
 | `CLAUDE_EVENTS_TOOLS` | `toolDetail` | `summary` (the default) cuts strings in tool inputs, results, prompts and answers to 2048 characters and arrays to 100 items, and says how much was cut. `full` sends them whole, up to 1 MiB of JSON per event (see Events). |
 | `CLAUDE_EVENTS_PERMISSIONS` | `hostPermissions` | `host` lets the host decide tool calls that would otherwise ask the person; `off` overrides an option that turned it on. Needs the token. |
-| `CLAUDE_EVENTS_COMMANDS` | `hostCommands` | `host` turns on the command poll, so the host can send an interactive session commands (see Commands); `off` overrides an option that turned it on. Needs the token. Unset, the mod never polls. |
+| `CLAUDE_EVENTS_COMMANDS` | `hostCommands` | `host` turns on the command poll, so the host can send an interactive session commands (see Commands); `off` overrides an option that turned it on. Needs the token. Off by default: with neither set, the mod never polls. |
 
 A value the mod cannot use (a remote `http` URL, a token with spaces, an
 unknown `CLAUDE_EVENTS_TOOLS`, a `CLAUDE_EVENTS_COMMANDS` other than `host` or
@@ -124,13 +124,14 @@ slow to answer may miss that last batch.
 ## Commands: `GET {url}/v1/commands`
 
 The mod long-polls this endpoint while an interactive session runs, and only
-when `CLAUDE_EVENTS_COMMANDS` (or the `hostCommands` option) is `host` and a
-token is set. A host that only observes leaves it unset and never sees a poll.
-A headless session, a `claude -p` run or one the SDK drives, never polls and
-takes no commands, whatever `CLAUDE_EVENTS_COMMANDS` says: Claude Code holds
-such a run open until the request the mod has out comes back, so a held poll
-would delay its exit by up to the rest of the hold. It still sends its events,
-and its permission asks when host permissions are on.
+when commands are on (`CLAUDE_EVENTS_COMMANDS=host`, or the `hostCommands`
+option) and a token is set. A host that only observes leaves both unset and
+never sees a poll. A headless session, a `claude -p` run or one the SDK
+drives, never polls and takes no commands, whatever `CLAUDE_EVENTS_COMMANDS`
+says: Claude Code holds such a run open until the request the mod has out
+comes back, so a held poll would delay its exit by up to the rest of the hold.
+It still sends its events, and its permission asks when host permissions are
+on.
 
 Polling goes on across `/clear` and a resume, under the new session id, and
 across a hot reload, under the new boot. It stops when the session ends for any

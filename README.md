@@ -95,8 +95,9 @@ no host sets `CLAUDE_EVENTS_URL`.
 
 A host that can send `prompt` commands controls the session, including one
 started with `--dangerously-skip-permissions`. The mod takes commands only
-with `CLAUDE_EVENTS_COMMANDS=host` and asks permissions only with
-`CLAUDE_EVENTS_PERMISSIONS=host`, and each needs a token. A host must:
+when `CLAUDE_EVENTS_COMMANDS=host` or its option turns them on, and asks
+permissions only when `CLAUDE_EVENTS_PERMISSIONS=host` or its option does.
+Each needs a token. A host must:
 
 - bind its listener to loopback only,
 - use a fresh random token and check it in constant time,
