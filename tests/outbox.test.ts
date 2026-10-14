@@ -258,6 +258,20 @@ describe('Outbox across a hot reload', () => {
     expect([carry?.dropped, carry?.noticeSeq]).toEqual([1, 3])
   })
 
+  test('holds its drop notice back until its boot.started goes, though a carry fills the first batch', async () => {
+    const host = fakePorts(() => reply(200))
+    const outbox = new Outbox()
+    const old = Array.from({ length: BATCH_SIZE }, (_, i) => ({ v: 1, boot: 'old-boot', seq: i + 1, ts: 1, sessionId: 's1', tag: undefined, type: 'turn.started', data: {} }) as const)
+    outbox.start(host.ports, CONFIG, { boot: 'old-boot', events: old, dropped: 0, noticeSeq: null }, { version: '1.2.3' })
+    // The carried events and boot.started take places too, so one of these goes.
+    for (let i = 0; i < QUEUE_CAP - BATCH_SIZE; i++) outbox.emit('tool.started', { i })
+    expect(outbox.droppedCount).toBe(1)
+
+    await host.advance(BACKOFF_MAX_MS)
+    const own = host.posted().filter(event => event.boot === outbox.bootId)
+    expect(own.slice(0, 2).map(event => event.type)).toEqual(['boot.started', 'outbox.dropped'])
+  })
+
   test('sends an adopted carry first, under its own boot, and never trims it', async () => {
     let up = false
     const host = fakePorts(() => (up ? reply(200) : reply(503)))

@@ -353,10 +353,11 @@ export class Outbox {
     const ports = this.ports
     const config = this.config
     if (ports === undefined || config === undefined) return 'retry'
-    // The count is taken now; drops while the POST is out stay counted for the next notice.
-    const droppedNow = this.dropped
     // A drop notice takes one of the batch's places, so no POST holds more than BATCH_SIZE.
-    const events = this.takeBatch(droppedNow > 0 ? BATCH_SIZE - 1 : BATCH_SIZE, config)
+    const events = this.takeBatch(this.dropped > 0 ? BATCH_SIZE - 1 : BATCH_SIZE, config)
+    // The count is taken now; drops while the POST is out stay counted for the next notice.
+    // While this boot's boot.started is still queued behind the batch, the notice waits for it.
+    const droppedNow = this.queue.some(event => event.boot === this.boot && event.type === 'boot.started') ? 0 : this.dropped
     const batch = [...events]
     if (droppedNow > 0) {
       if (this.noticeSeq === undefined) {
