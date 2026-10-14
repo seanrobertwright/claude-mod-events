@@ -135,12 +135,23 @@ function compact(fields: { readonly [key: string]: JsonValue | undefined }): Eve
   return out
 }
 
-/** `claudeCode` is what `$.session.version()` answered, or undefined when it failed. */
-export function bootStartedData(claudeCode: { readonly version: string; readonly base?: string; readonly builtAt?: string } | undefined): EventData {
-  return compact({
+function stringField(record: { readonly [key: string]: unknown }, key: string): string | undefined {
+  const value = field(record, key)
+  return typeof value === 'string' ? value : undefined
+}
+
+/**
+ * `answer` is what `$.session.version()` answered, or undefined when it
+ * failed. The mod API changes between releases, so the answer is read field
+ * by field, and without a `version` the host gets no `claudeCode` at all.
+ */
+export function bootStartedData(answer: unknown): EventData {
+  const version = isRecord(answer) ? stringField(answer, 'version') : undefined
+  if (!isRecord(answer) || version === undefined) return { version: MOD_VERSION }
+  return {
     version: MOD_VERSION,
-    claudeCode: claudeCode === undefined ? undefined : compact({ version: claudeCode.version, base: claudeCode.base, builtAt: claudeCode.builtAt }),
-  })
+    claudeCode: compact({ version, base: stringField(answer, 'base'), builtAt: stringField(answer, 'builtAt') }),
+  }
 }
 
 export type SessionStartedFields = {

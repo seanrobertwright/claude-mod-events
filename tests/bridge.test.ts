@@ -298,6 +298,15 @@ describe('event-bridge as a boot starts', () => {
     expect(events[0]?.data).toEqual({ version: MOD_VERSION })
   })
 
+  test("leaves out Claude Code's version when the engine answers in a shape it does not know", async ($, on) => {
+    const w = world(on, HOST)
+    // As a release that renamed the field might answer.
+    w.answerVersion(() => ({ release: '2.1.400', base: '2.1.400' }) as unknown as SessionVersion)
+    await $.session.start({ cwd: '/work', surface: null, isInteractive: true })
+    await w.clock.advance(200)
+    expect(w.events().map(event => [event.type, event.data])).toEqual([['boot.started', { version: MOD_VERSION }]])
+  })
+
   test('holds what is raised while Claude Code has yet to say its version behind boot.started', async ($, on) => {
     const w = world(on, HOST)
     let answer: (version: SessionVersion) => void = () => undefined
