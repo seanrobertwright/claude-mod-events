@@ -111,17 +111,43 @@ and what the previous boot had not had acknowledged goes on:
 | `session.started` | A session starts, resumes, or begins again after `/clear` or compaction | `source` (`startup`, `resume`, `clear`, `compact` or `fork`), `cwd`, `transcriptPath`, and `model`, `agentType` when known |
 | `session.ended` | A session ends | `reason` (`prompt_input_exit`, `clear`, `resume`, `logout` or `other`), `resumeId` (what `claude --resume` takes) |
 | `turn.started` | A model turn begins | `turnId`, `prompt` |
-| `turn.completed` | A turn ends, in the main loop or a subagent | `turnId`, `reason` (`answer`, `aborted`, `refusal` or `error`), `isAborted`, `durationMs`, `answer`, and `agentId`, `usage` when present |
+| `turn.completed` | A turn ends, in the main loop or a subagent | `turnId`, `reason` (`answer`, `aborted`, `refusal` or `error`; see Tool and turn details), `isAborted`, `durationMs`, `answer`, and `agentId`, `usage` when present |
 | `attention.notification` | Claude Code raises a notification, such as waiting for input or for a permission | `notificationType`, `message`, and `title`, `agentId` when present |
 | `permission.requested` | The permission dialog is about to show | `tool`, `input`, and `suggestions`, `agentId` when present |
 | `tool.started` | A tool call starts | `tool`, `input` (the tool's arguments), and `toolUseId` when the call has one, `agentId` in a subagent |
-| `tool.finished` | A tool call ends | `tool`, `status` (`ok`, `error`, `denied` or `failed`), `durationMs`, and `text` (the result as the model read it, or the denial reason), `toolUseId` and `agentId` when present |
+| `tool.finished` | A tool call ends | `tool`, `status` (`ok`, `error`, `refused` or `failed`; see Tool and turn details), `durationMs`, and `text` (the result as the model read it, or the reason the call was refused), `toolUseId` and `agentId` when present |
 | `command.result` | A command the host sent was run or refused | `id` (null when the command had none), `ok`, and `error` when not ok |
 | `outbox.dropped` | Events were dropped while the host was unreachable | `count` |
 
 On `session.ended` the mod sends what it holds at once, within Claude Code's
 short exit bound (about 1.5 s for every plugin together). A host that is
 slow to answer may miss that last batch.
+
+### Tool and turn details
+
+A `tool.finished` event's `status` says how the call ended:
+
+| `status` | Meaning |
+| --- | --- |
+| `ok` | The tool answered. |
+| `error` | The tool's answer is an error. A permission denial reports `error` too: a settings rule's deny, the host's, the person's No and a `--permission-mode dontAsk` deny all do, with the reason in `text`. The mod doesn't tell a denial apart from the tool's own error, because it can't see the person's No or a `dontAsk` deny. |
+| `refused` | A plugin's hook refused the call, or withheld its result after the tool ran. The hook's reason is in `text`. |
+| `failed` | The call ended with no answer at all: a hook or Claude Code threw. |
+
+A tool's `durationMs` is the mod's own timing, from the call's start to its
+answer, so it includes any time a permission dialog waited for the person. A
+turn's `durationMs` is Claude Code's own, and it can come out shorter than a
+tool call inside that turn.
+
+A turn's `reason` is Claude Code's own word for how it ended. `aborted` comes
+from Esc while Claude is working, and from the host's `interrupt`, even one
+that closes an open dialog. A turn that ends because the person declined a
+dialog, with No or Esc on a permission dialog or Esc on an `AskUserQuestion`,
+reports `answer` with an empty `answer`, and No and Esc look the same. To
+recognise one, check the turn's last tool event: a `tool.finished` with
+`status` `error`, followed by a `turn.completed` with no answer text. An
+empty `answer` alone isn't enough, because a turn that ends with only
+thinking has one too.
 
 ## Commands: `GET {url}/v1/commands`
 
