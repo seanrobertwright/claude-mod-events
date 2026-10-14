@@ -1,4 +1,5 @@
 import type { EngineInterface, PluginOptions, Register } from 'claude-code'
+import type { InboxCarry } from '../types'
 import { type Config, type ToolDetail, parseConfig } from './config'
 import {
   nowMs,
@@ -13,8 +14,8 @@ import {
   turnStartedData,
   type ToolOutcome,
 } from './events'
-import { Inbox } from './inbox'
-import { Outbox } from './outbox'
+import { Inbox, parseInboxCarry } from './inbox'
+import { type Carry, Outbox, parseOutboxCarry } from './outbox'
 import { askHost } from './permission'
 import type { Ports } from './ports'
 
@@ -22,6 +23,10 @@ const PLUGIN_NAME = 'event-bridge'
 
 /** Below this much of `session.end`'s bound left, the final flush is skipped so the exit stays fast. */
 const END_FLUSH_MIN_MS = 200
+
+/** What each load leaves for the next: `$.state` outlives a hot reload, the module's memory does not. */
+const OUTBOX_CARRY = { plugin: 'event-bridge', key: 'outbox' } as const
+const INBOX_CARRY = { plugin: 'event-bridge', key: 'inbox' } as const
 
 /** What one load of the module holds. A hot reload starts a fresh one. */
 type Bridge = {
@@ -42,6 +47,20 @@ function portsFor($: EngineInterface): Ports {
     toast: text => $.ui.toast(text),
     submitPrompt: args => $.prompt.submit(args),
     abortTurn: turnId => $.turn.abort({ turnId }),
+    // A write that fails leaves the one before it standing: the next load may send
+    // again what the host already has (it drops a repeated boot and seq) or miss the newest.
+    carryOutbox: carry => void $.state.set(OUTBOX_CARRY, carry).catch(() => undefined),
+    carryInbox: carry => void $.state.set(INBOX_CARRY, carry).catch(() => undefined),
+  }
+}
+
+/** What the load before this one left, or nothing when this is the first load or it cannot be read. */
+async function readCarries($: EngineInterface): Promise<{ outbox?: Carry; inbox?: InboxCarry }> {
+  try {
+    const [outbox, inbox] = await Promise.all([$.state.get(OUTBOX_CARRY), $.state.get(INBOX_CARRY)])
+    return { outbox: parseOutboxCarry(outbox.value), inbox: parseInboxCarry(inbox.value) }
+  } catch {
+    return {}
   }
 }
 
@@ -75,8 +94,9 @@ async function readConfig($: EngineInterface, bridge: Bridge): Promise<void> {
   bridge.config = result.config
   for (const warning of result.warnings) ports.log(warning, 'transcript')
   bridge.outbox.sessionId ??= await $.session.id()
-  bridge.outbox.start(ports, result.config)
-  bridge.inbox.start(ports, result.config)
+  const carried = await readCarries($)
+  bridge.outbox.start(ports, result.config, carried.outbox)
+  bridge.inbox.start(ports, result.config, carried.inbox)
 }
 
 /**

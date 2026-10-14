@@ -1,17 +1,20 @@
 import type { JsonValue } from 'claude-code'
 import type { ToolDetail } from './config'
 
-export type EventType =
-  | 'session.started'
-  | 'session.ended'
-  | 'turn.started'
-  | 'turn.completed'
-  | 'attention.notification'
-  | 'permission.requested'
-  | 'tool.started'
-  | 'tool.finished'
-  | 'command.result'
-  | 'outbox.dropped'
+export const EVENT_TYPES = [
+  'session.started',
+  'session.ended',
+  'turn.started',
+  'turn.completed',
+  'attention.notification',
+  'permission.requested',
+  'tool.started',
+  'tool.finished',
+  'command.result',
+  'outbox.dropped',
+] as const
+
+export type EventType = (typeof EVENT_TYPES)[number]
 
 export type EventData = { readonly [key: string]: JsonValue }
 
@@ -42,6 +45,40 @@ export function nowMs(): number {
 /** A random id for this load of the module, so the host can tell a reload's `seq` restart from a gap. */
 export function newBootId(): string {
   return crypto.randomUUID()
+}
+
+export function isRecord(value: unknown): value is { readonly [key: string]: unknown } {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+export function field(record: { readonly [key: string]: unknown }, key: string): unknown {
+  return Object.hasOwn(record, key) ? record[key] : undefined
+}
+
+function isEventType(value: unknown): value is EventType {
+  return typeof value === 'string' && (EVENT_TYPES as readonly string[]).includes(value)
+}
+
+/**
+ * An envelope read back from `$.state`, or undefined when it is not one. A
+ * reload can bring in a different version of the mod, so nothing written by
+ * the earlier load is taken on trust.
+ */
+export function parseEnvelope(raw: unknown): Envelope | undefined {
+  if (!isRecord(raw)) return undefined
+  const boot = field(raw, 'boot')
+  const seq = field(raw, 'seq')
+  const ts = field(raw, 'ts')
+  const sessionId = field(raw, 'sessionId')
+  const type = field(raw, 'type')
+  const data = field(raw, 'data')
+  if (field(raw, 'v') !== 1 || typeof boot !== 'string' || boot === '') return undefined
+  if (typeof seq !== 'number' || !Number.isSafeInteger(seq) || seq < 1) return undefined
+  if (typeof ts !== 'number' || !Number.isFinite(ts)) return undefined
+  if (sessionId !== undefined && typeof sessionId !== 'string') return undefined
+  if (!isEventType(type) || !isRecord(data)) return undefined
+  // `data` came from `toWire` or a literal, and `$.state` holds JSON data alone.
+  return { v: 1, boot, seq, ts, sessionId, tag: undefined, type, data: data as EventData }
 }
 
 /**

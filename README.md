@@ -111,6 +111,7 @@ three.
 | `hooks/inbox.ts` | Long-polls for commands and runs them |
 | `hooks/permission.ts` | Asks the host to decide a tool call |
 | `hooks/events.ts` | Event shapes and truncation |
+| `types/index.d.ts` | What the mod keeps in `$.state` so a hot reload loses nothing |
 | `tests/` | Tests for `claude plugin test` |
 | `examples/listener.mjs` | The reference host |
 | `PROTOCOL.md` | The wire protocol |

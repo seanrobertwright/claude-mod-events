@@ -2,6 +2,7 @@ import type { HttpInit, HttpResponse, PromptSubmitArgs } from 'claude-code'
 import type { Config } from '../hooks/config'
 import type { Envelope } from '../hooks/events'
 import type { Ports } from '../hooks/ports'
+import type { InboxCarry, OutboxCarry } from '../types'
 
 export const CONFIG: Config = {
   url: 'http://127.0.0.1:47800',
@@ -34,6 +35,8 @@ export function fakePorts(answer: Answer = () => reply(204)) {
   const toasts: string[] = []
   const prompts: PromptSubmitArgs[] = []
   const aborts: string[] = []
+  const outboxCarries: OutboxCarry[] = []
+  const inboxCarries: InboxCarry[] = []
 
   const ports: Ports = {
     fetch: async (url, init) => {
@@ -63,6 +66,12 @@ export function fakePorts(answer: Answer = () => reply(204)) {
     },
     abortTurn: async turnId => {
       aborts.push(turnId)
+    },
+    carryOutbox: carry => {
+      outboxCarries.push(JSON.parse(JSON.stringify(carry)) as OutboxCarry)
+    },
+    carryInbox: carry => {
+      inboxCarries.push(carry)
     },
   }
 
@@ -103,6 +112,9 @@ export function fakePorts(answer: Answer = () => reply(204)) {
     toasts,
     prompts,
     aborts,
+    /** Each carry written, as `$.state` would hold it. */
+    outboxCarries,
+    inboxCarries,
     advance,
     settle,
     posted,
