@@ -39,6 +39,14 @@ export function authHeaders(config: Config): Record<string, string> {
 
 type SendOutcome = 'sent' | 'retry' | 'rejected'
 
+/** The seq of a boot's `boot.started`, kept for it from the moment its outbox is made. */
+const BOOT_STARTED_SEQ = 1
+
+/** Whether `event` is `boot`'s `boot.started`. */
+function isBootStarted(event: Envelope | undefined, boot: string): boolean {
+  return event?.boot === boot && event.type === 'boot.started'
+}
+
 /** Where `boot`'s first event sits in `events`, or the end when it has none there. */
 function indexOfBoot(events: readonly Envelope[], boot: string): number {
   const at = events.findIndex(event => event.boot === boot)
@@ -53,7 +61,7 @@ function indexOfBoot(events: readonly Envelope[], boot: string): number {
  */
 function indexAfterBootStarted(events: readonly Envelope[], boot: string): number {
   const at = indexOfBoot(events, boot)
-  return events[at]?.type === 'boot.started' ? at + 1 : at
+  return isBootStarted(events[at], boot) ? at + 1 : at
 }
 
 function isCount(value: unknown): value is number {
@@ -112,8 +120,8 @@ export class Outbox {
   private dropped = 0
   /** The seq the next drop notice goes out under, kept across retries so a retry opens no gap. */
   private noticeSeq: number | undefined
-  /** The last seq taken. Seq 1 is kept for the boot's `boot.started`, which `start` puts ahead of the boot's other events. */
-  private seq = 1
+  /** The last seq taken. BOOT_STARTED_SEQ is taken from the start, so the boot's other events count on behind its `boot.started`. */
+  private seq = BOOT_STARTED_SEQ
   private state: 'pending' | 'on' | 'off' = 'pending'
   private ports: Ports | undefined
   private config: Config | undefined
@@ -158,15 +166,15 @@ export class Outbox {
   /**
    * Turns the outbox on. `bootStarted` is the data of this boot's
    * `boot.started`, which goes under seq 1 ahead of every event queued so far;
-   * `carry` is what an earlier load of the module left unsent, which goes
-   * ahead of both.
+   * seq 1 is kept for it whether or not it is given. `carry` is what an
+   * earlier load of the module left unsent, which goes ahead of both.
    */
   start(ports: Ports, config: Config, carry?: Carry, bootStarted?: EventData): void {
     if (this.state !== 'pending') return
     this.ports = ports
     this.config = config
     this.state = 'on'
-    if (bootStarted !== undefined) this.queue.unshift(this.envelope('boot.started', bootStarted, this.sessionId, 1))
+    if (bootStarted !== undefined) this.queue.unshift(this.envelope('boot.started', bootStarted, this.sessionId, BOOT_STARTED_SEQ))
     if (carry !== undefined && carry.boot !== this.boot) this.adopt(carry)
     this.carrySoon()
     if (this.queue.length > 0) this.schedule(0)
@@ -249,12 +257,12 @@ export class Outbox {
    */
   private carry(): OutboxCarry {
     const pending = [...this.sending, ...this.queue]
-    const whole = indexAfterBootStarted(pending, this.boot)
+    const keptWhole = indexAfterBootStarted(pending, this.boot)
     let kept = 0
     let chars = 0
     for (const event of pending) {
       chars += this.lengthOf(event) + 1
-      if (kept >= whole && (kept >= CARRY_LIMIT || chars > MAX_CARRY_CHARS)) break
+      if (kept >= keptWhole &&(kept >= CARRY_LIMIT || chars > MAX_CARRY_CHARS)) break
       kept += 1
     }
     const events = pending.slice(0, kept)
@@ -358,7 +366,7 @@ export class Outbox {
     const events = this.takeBatch(this.dropped > 0 ? BATCH_SIZE - 1 : BATCH_SIZE, config)
     // The count is taken now; drops while the POST is out stay counted for the next notice.
     // While this boot's boot.started is still queued behind the batch, the notice waits for it.
-    const droppedNow = this.queue.some(event => event.boot === this.boot && event.type === 'boot.started') ? 0 : this.dropped
+    const droppedNow = this.queue.some(event => isBootStarted(event, this.boot)) ? 0 : this.dropped
     const batch = [...events]
     if (droppedNow > 0) {
       if (this.noticeSeq === undefined) {
