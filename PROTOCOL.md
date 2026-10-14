@@ -69,8 +69,11 @@ sent whole.
 ```
 
 - `boot` is new each time the mod loads (a process start or a hot reload).
-- `seq` counts up from 1 within one `boot`. A gap means events were dropped;
-  an `outbox.dropped` event says how many.
+- `seq` counts up from 1 within one `boot`, and `seq` 1 is that boot's
+  `boot.started`, which says which version of the mod and of Claude Code
+  the boot runs. No other event of a boot arrives ahead of its
+  `boot.started`, and the mod never drops one to make room. A gap means
+  events were dropped; an `outbox.dropped` event says how many.
 - `ts` is epoch milliseconds when the event was raised.
 - `sessionId` is the Claude Code session id at that moment. It changes after
   `/clear` and after a resume, so route by `tag` when you need one key for a pane.
@@ -82,7 +85,7 @@ How the mod treats your answer:
 | --- | --- |
 | `2xx` | The batch is done. |
 | A `4xx` other than `408` and `429` | The batch is dropped. The mod writes one line to the transcript the first time. |
-| Anything else: no answer, `408`, `429`, `5xx` | The batch is kept and retried, waiting 250 ms and doubling up to 5 s. The mod holds at most 1000 events; past that it drops the oldest and reports the count in an `outbox.dropped` event. |
+| Anything else: no answer, `408`, `429`, `5xx` | The batch is kept and retried, waiting 250 ms and doubling up to 5 s. The mod holds at most 1000 events; past that it drops the oldest, never a `boot.started`, and reports the count in an `outbox.dropped` event. |
 
 ### After a hot reload
 
@@ -92,7 +95,8 @@ when it restarts a lost hooks worker. The mod starts again under a new `boot`,
 and what the previous boot had not had acknowledged goes on:
 
 - The new boot first sends the previous boot's unacknowledged events, each
-  under the previous `boot` and its own `seq`, then its own events.
+  under the previous `boot` and its own `seq`, then its own events, starting
+  with its `boot.started`.
 - At most 200 of the previous boot's own events, and 3 MiB of their JSON,
   are carried. The rest are reported in an `outbox.dropped` event under that
   boot.
@@ -103,6 +107,7 @@ and what the previous boot had not had acknowledged goes on:
 
 | `type` | When | `data` |
 | --- | --- | --- |
+| `boot.started` | The mod loads: a process start or a hot reload. It is the boot's `seq` 1 | `version` (the mod's own, as its `plugin.json` states it), and `claudeCode` when Claude Code says its version: `version` (as `claude --version` prints it), and `base` (the release it is built from, such as `2.1.300` or `2.1.300-dev`) and `builtAt` (an ISO 8601 time) when known |
 | `session.started` | A session starts, resumes, or begins again after `/clear` or compaction | `source` (`startup`, `resume`, `clear`, `compact` or `fork`), `cwd`, `transcriptPath`, and `model`, `agentType` when known |
 | `session.ended` | A session ends | `reason` (`prompt_input_exit`, `clear`, `resume`, `logout` or `other`), `resumeId` (what `claude --resume` takes) |
 | `turn.started` | A model turn begins | `turnId`, `prompt` |
