@@ -243,8 +243,11 @@ createInterface({ input: process.stdin }).on('line', line => {
   }
 })
 
+// EADDRINUSE doesn't prove another program holds the port: Windows can refuse
+// a port with that code while nothing listens on it.
 server.on('error', error => {
-  fail(error.code === 'EADDRINUSE' ? `port ${port} is already in use; pick another with --port` : error.message)
+  const refused = error.code === 'EADDRINUSE' || error.code === 'EACCES'
+  fail(refused ? `could not listen on port ${port} (${error.code}); pick another with --port` : error.message)
 })
 
 server.listen(port, '127.0.0.1', () => {

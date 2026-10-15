@@ -54,6 +54,10 @@ event and sends commands you type.
 node examples/listener.mjs --port 47800 --token try-it-out-1234
 ```
 
+If it can't listen on the port, pick another with `--port` and use that port
+in `CLAUDE_EVENTS_URL` below. Windows can refuse some ports even when nothing
+is listening on them.
+
 In another terminal, with the mod installed (below) or loaded from this folder:
 
 ```sh

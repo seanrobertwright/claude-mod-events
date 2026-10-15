@@ -50,10 +50,10 @@ describe('splitToolCall', () => {
 describe('toolFinishedData', () => {
   const call = { tool: 'Bash', toolUseId: 'tu_1', agentId: undefined }
 
-  test('reports ok, error, denied and failed calls', () => {
+  test('reports ok, error, refused and failed calls', () => {
     expect(toolFinishedData(call, { text: 'done' }, 12, 'summary')).toEqual({ tool: 'Bash', toolUseId: 'tu_1', status: 'ok', durationMs: 12, text: 'done' })
     expect(toolFinishedData(call, { isError: true, text: 'boom' }, 1, 'summary').status).toBe('error')
-    expect(toolFinishedData(call, { deny: 'no' }, 1, 'summary')).toEqual({ tool: 'Bash', toolUseId: 'tu_1', status: 'denied', durationMs: 1, text: 'no' })
+    expect(toolFinishedData(call, { deny: 'no' }, 1, 'summary')).toEqual({ tool: 'Bash', toolUseId: 'tu_1', status: 'refused', durationMs: 1, text: 'no' })
     expect(toolFinishedData(call, undefined, 1, 'summary').status).toBe('failed')
   })
 })

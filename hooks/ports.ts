@@ -21,3 +21,22 @@ export type Ports = {
   /** Keeps the running turn and the last command id in `$.state`, likewise. */
   readonly carryInbox: (carry: InboxCarry) => void
 }
+
+/**
+ * `ports.fetch`, given up on after `timeoutMs`: resolves the response, or
+ * undefined when the request fails or the time runs out first. `$.http.fetch`
+ * takes no signal, so a request given up on still runs to its end, unread.
+ */
+export function fetchWithin(ports: Ports, timeoutMs: number, url: string, init?: HttpInit): Promise<HttpResponse | undefined> {
+  return new Promise(resolve => {
+    let settled = false
+    const settle = (response: HttpResponse | undefined) => {
+      if (settled) return
+      settled = true
+      timer.cancel()
+      resolve(response)
+    }
+    const timer = ports.after(timeoutMs, () => settle(undefined))
+    ports.fetch(url, init).then(settle, () => settle(undefined))
+  })
+}

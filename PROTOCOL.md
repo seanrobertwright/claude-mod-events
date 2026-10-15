@@ -8,6 +8,15 @@ The host runs an HTTP listener. The mod pushes events to it and, when
 allowed, pulls commands from it and asks it to decide tool permissions. Every
 request comes from the Claude Code process, never from a browser.
 
+Answer every request yourself; don't redirect. Claude Code follows a
+redirect, and the mod sees only the answer at the end of it. A `302` turns a
+`POST` into a `GET` without its body, as a `301` and a `303` do under the
+fetch standard, so a batch of events redirected that way is lost, and the mod
+counts it delivered if the end of the redirect answers `2xx`. A `307` keeps
+the `POST` and its body. Claude Code keeps the `Authorization` header on a
+redirect to the same host and port and drops it on one that leaves them
+(measured on Claude Code 2.1.299).
+
 ## Discovery
 
 The host sets these variables in the environment of the `claude` process it
@@ -49,8 +58,12 @@ Clearing keeps the values out of what a process is handed, not out of reach:
 ## Events: `POST {url}/v1/events`
 
 Body: `{ "events": [Envelope, ...] }`, at most 200 per request and 3 MiB
-(3,145,728 characters) of JSON. Answer with any `2xx`. Events from one
-process arrive in order, one request at a time.
+(3,145,728 characters) of JSON. Answer with any `2xx`, within 10 seconds.
+The mod sends one request at a time, in order. When a request has had no
+answer for 10 seconds, the mod gives up on it and sends the batch again, so
+an event can arrive twice. A request it gave up on can still reach you after
+a later one, and every event in it is then one you already have. Drop an
+event whose `boot` and `seq` you already have.
 
 An event whose JSON is longer than 1 MiB (1,048,576 characters), as one can
 be with `full` detail, is sent with its `data` cut the way `summary` cuts it.
@@ -88,7 +101,7 @@ How the mod treats your answer:
 | --- | --- |
 | `2xx` | The batch is done. |
 | A `4xx` other than `408` and `429` | The batch is dropped. The mod writes one line to the transcript the first time. |
-| Anything else: no answer, `408`, `429`, `5xx` | The batch is kept and retried, waiting 250 ms and doubling up to 5 s. The mod holds at most 1000 events; past that it drops the oldest, never a `boot.started`, and reports the count in an `outbox.dropped` event. |
+| Anything else: no answer within 10 s, `408`, `429`, `5xx` | The batch is kept and retried, waiting 250 ms and doubling up to 5 s. The mod holds at most 1000 events; past that it drops the oldest, never a `boot.started`, and reports the count in an `outbox.dropped` event. |
 
 ### After a hot reload
 
@@ -114,17 +127,43 @@ and what the previous boot had not had acknowledged goes on:
 | `session.started` | A session starts, resumes, or begins again after `/clear` or compaction | `source` (`startup`, `resume`, `clear`, `compact` or `fork`), `cwd`, `transcriptPath`, and `model`, `agentType` when known |
 | `session.ended` | A session ends | `reason` (`prompt_input_exit`, `clear`, `resume`, `logout` or `other`), `resumeId` (what `claude --resume` takes) |
 | `turn.started` | A model turn begins | `turnId`, `prompt` |
-| `turn.completed` | A turn ends, in the main loop or a subagent | `turnId`, `reason` (`answer`, `aborted`, `refusal` or `error`), `isAborted`, `durationMs`, `answer`, and `agentId`, `usage` when present |
+| `turn.completed` | A turn ends, in the main loop or a subagent | `turnId`, `reason` (`answer`, `aborted`, `refusal` or `error`; see Tool and turn details), `isAborted`, `durationMs`, `answer`, and `agentId`, `usage` when present |
 | `attention.notification` | Claude Code raises a notification, such as waiting for input or for a permission | `notificationType`, `message`, and `title`, `agentId` when present |
 | `permission.requested` | The permission dialog is about to show | `tool`, `input`, and `suggestions`, `agentId` when present |
 | `tool.started` | A tool call starts | `tool`, `input` (the tool's arguments), and `toolUseId` when the call has one, `agentId` in a subagent |
-| `tool.finished` | A tool call ends | `tool`, `status` (`ok`, `error`, `denied` or `failed`), `durationMs`, and `text` (the result as the model read it, or the denial reason), `toolUseId` and `agentId` when present |
+| `tool.finished` | A tool call ends | `tool`, `status` (`ok`, `error`, `refused` or `failed`; see Tool and turn details), `durationMs`, and `text` (the result as the model read it, or the reason the call was refused), `toolUseId` and `agentId` when present |
 | `command.result` | A command the host sent was run or refused | `id` (null when the command had none), `ok`, and `error` when not ok |
 | `outbox.dropped` | Events were dropped while the host was unreachable | `count` |
 
 On `session.ended` the mod sends what it holds at once, within Claude Code's
 short exit bound (about 1.5 s for every plugin together). A host that is
 slow to answer may miss that last batch.
+
+### Tool and turn details
+
+A `tool.finished` event's `status` says how the call ended:
+
+| `status` | Meaning |
+| --- | --- |
+| `ok` | The tool answered. |
+| `error` | The tool's answer is an error. A permission denial reports `error` too: a settings rule's deny, the host's, the person's No and a `--permission-mode dontAsk` deny all do, with the reason in `text`. The mod doesn't tell a denial apart from the tool's own error, because it can't see the person's No or a `dontAsk` deny. |
+| `refused` | A plugin's hook refused the call, or withheld its result after the tool ran. The hook's reason is in `text`. |
+| `failed` | The call ended with no answer at all: a hook or Claude Code threw. |
+
+A tool's `durationMs` is the mod's own timing, from the call's start to its
+answer, so it includes any time a permission dialog waited for the person. A
+turn's `durationMs` is Claude Code's own, and it can come out shorter than a
+tool call inside that turn.
+
+A turn's `reason` is Claude Code's own word for how it ended. `aborted` comes
+from Esc while Claude is working, and from the host's `interrupt`, even one
+that closes an open dialog. A turn that ends because the person declined a
+dialog, with No or Esc on a permission dialog or Esc on an `AskUserQuestion`,
+reports `answer` with an empty `answer`, and No and Esc look the same. To
+recognise one, check the turn's last tool event: a `tool.finished` with
+`status` `error`, followed by a `turn.completed` with no answer text. An
+empty `answer` alone isn't enough, because a turn that ends with only
+thinking has one too.
 
 ## Commands: `GET {url}/v1/commands`
 

@@ -266,6 +266,13 @@ export type ToolOutcome = {
   readonly text?: string
 }
 
+/**
+ * A finished tool call as the host gets it. A permission denial reaches the
+ * model as an error result, so it reports `error`; the mod can't see the
+ * person's No or a `dontAsk` deny to report it otherwise. `refused` is a
+ * plugin's hook refusing the call or withholding its result (a `deny` on the
+ * `tool.call` result). `failed` is a call that ended with no result at all.
+ */
 export function toolFinishedData(
   call: { readonly tool: string; readonly toolUseId: string | undefined; readonly agentId: string | undefined },
   outcome: ToolOutcome | undefined,
@@ -274,7 +281,7 @@ export function toolFinishedData(
 ): EventData {
   let status: string
   if (outcome === undefined) status = 'failed'
-  else if (outcome.deny !== undefined) status = 'denied'
+  else if (outcome.deny !== undefined) status = 'refused'
   else if (outcome.isError === true) status = 'error'
   else status = 'ok'
   return compact({

@@ -1,5 +1,16 @@
 import { describe, expect, test } from 'claude-code/testing'
-import { BACKOFF_MAX_MS, BACKOFF_START_MS, BATCH_SIZE, CARRY_LIMIT, FLUSH_DELAY_MS, MAX_EVENT_CHARS, Outbox, QUEUE_CAP, parseOutboxCarry } from '../hooks/outbox'
+import {
+  BACKOFF_MAX_MS,
+  BACKOFF_START_MS,
+  BATCH_SIZE,
+  CARRY_LIMIT,
+  FLUSH_DELAY_MS,
+  MAX_EVENT_CHARS,
+  Outbox,
+  POST_TIMEOUT_MS,
+  QUEUE_CAP,
+  parseOutboxCarry,
+} from '../hooks/outbox'
 import { CONFIG, ENGINE_TEXT_LIMIT, fakePorts, reply } from './fakes'
 
 // An outbox keeps seq 1 for its boot's `boot.started`. A test that starts it
@@ -160,6 +171,54 @@ describe('Outbox', () => {
     outbox.emit('turn.started', {})
     await host.advance(FLUSH_DELAY_MS)
     expect(outbox.queued).toBe(1)
+  })
+
+  test('gives up on a POST the host does not answer in time, and sends the batch again', async () => {
+    let calls = 0
+    const host = fakePorts(() => (++calls === 1 ? new Promise(() => {}) : reply(200)))
+    const outbox = new Outbox()
+    outbox.start(host.ports, CONFIG)
+    outbox.emit('turn.started', {})
+    await host.advance(FLUSH_DELAY_MS)
+    expect(host.requests.length).toBe(1)
+
+    await host.advance(POST_TIMEOUT_MS - 1)
+    expect(host.requests.length).toBe(1)
+    await host.advance(1)
+    expect(outbox.queued).toBe(1)
+    expect(host.logs).toEqual([`host unreachable (no response); holding up to ${QUEUE_CAP} events`])
+
+    await host.advance(BACKOFF_START_MS)
+    expect(host.requests.length).toBe(2)
+    expect(outbox.queued).toBe(0)
+    // The same event both times, so a host that got the first drops the second by boot and seq.
+    expect(host.posted().map(event => event.seq)).toEqual([2, 2])
+    expect(new Set(host.posted().map(event => event.boot)).size).toBe(1)
+  })
+
+  test('ignores the late answer to a POST it gave up on', async () => {
+    let releaseFirst: ((status: number) => void) | undefined
+    let calls = 0
+    const host = fakePorts(() =>
+      ++calls === 1
+        ? new Promise(resolve => {
+            releaseFirst = status => resolve(reply(status))
+          })
+        : reply(200),
+    )
+    const outbox = new Outbox()
+    outbox.start(host.ports, CONFIG)
+    outbox.emit('turn.started', {})
+    await host.advance(FLUSH_DELAY_MS + POST_TIMEOUT_MS + BACKOFF_START_MS)
+    expect(host.requests.length).toBe(2)
+    expect(outbox.queued).toBe(0)
+
+    // A failure arriving now must not put the delivered batch back.
+    releaseFirst?.(503)
+    await host.advance(BACKOFF_MAX_MS)
+    expect(host.requests.length).toBe(2)
+    expect(outbox.queued).toBe(0)
+    expect(outbox.droppedCount).toBe(0)
   })
 
   test('flushNow sends everything at once, waiting for a POST already out', async () => {
