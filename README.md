@@ -82,15 +82,30 @@ claude plugin marketplace add <path to this clone>
 claude plugin install event-bridge@event-bridge
 ```
 
-From GitHub, at the prompt of a Claude Code terminal session, with `<owner>` set
-to the account that hosts this repository:
+From GitHub, with `<owner>` set to the account that hosts this repository:
 
-```text
-/plugin install event-bridge --marketplace <owner>/claude-mod-events
+```sh
+claude plugin install event-bridge --marketplace <owner>/claude-mod-events
 ```
 
 Once installed at user scope it loads in every session, and stays idle wherever
 no host sets `CLAUDE_EVENTS_URL`.
+
+## Releases
+
+Each release is a `v<version>` tag on `main` with a GitHub release, and the tag
+names the version `.claude-plugin/plugin.json` states at that commit. The
+manifest version moves with every tag, so `main` is never behind the latest
+release. The marketplace serves `main` itself, not a tag, so an install or
+update gets the newest release or later. A host that needs a feature can name
+its minimum release and read the mod's version from `boot.started`.
+
+`scripts/check.sh` fails when the manifest version is behind the newest tag, and
+CI fails a pushed tag that does not match the manifest.
+
+## License
+
+AGPL-3.0. See [LICENSE](LICENSE).
 
 ## Security
 
@@ -124,6 +139,7 @@ three.
 | `examples/listener.mjs` | The reference host |
 | `PROTOCOL.md` | The wire protocol |
 | `PLAN.md` | The design plan the build started from |
+| `LICENSE` | AGPL-3.0 |
 
 ## Development
 
@@ -142,5 +158,5 @@ Turn on the repository's pre-commit hook once per clone:
 git config core.hooksPath .githooks
 ```
 
-It runs `scripts/check.sh`: a scan for personal paths and broken characters, and
-markdownlint. CI runs the same script.
+It runs `scripts/check.sh`: a scan for personal paths and broken characters,
+markdownlint, and the version checks. CI runs the same script.

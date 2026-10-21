@@ -1,6 +1,7 @@
 {
   "name": "event-bridge",
   "version": "0.1.0",
+  "license": "AGPL-3.0-only",
   "description": "Sends session, turn, attention and tool events to a host program over HTTP and, when allowed, takes prompts and interrupts back.",
   "types": "./types/index.d.ts",
   "userConfig": {
