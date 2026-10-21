@@ -1,0 +1,27 @@
+name: tag
+
+# A release tag must name the version the manifest states at that commit,
+# so a tutorial that asks for "0.1.0 or later" gets what the tag promises.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches the manifest
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          manifest_version="$(node -p "require('./.claude-plugin/plugin.json').version")"
+          if [ "$TAG" != "v$manifest_version" ]; then
+            echo "tag $TAG does not match .claude-plugin/plugin.json version $manifest_version" >&2
+            exit 1
+          fi
